@@ -14,6 +14,7 @@
 # Same training as dolzhenkosv/c2s-pythia-1b-azithro-transfer@040f129,
 # unmodified sft_pythia1b.yaml, on a Puma A100 MIG slice.
 # Needs ~/c2s/c2s.env with HF_TOKEN=<write token> (checkpoint uploads only).
+# Optional: TG_TOKEN and TG_CHAT there plus ~/c2s/tg_monitor.py for Telegram updates.
 
 set -euo pipefail
 
@@ -37,6 +38,17 @@ grep -q '^HF_TOKEN=hf_' "$ENV_FILE" || { echo "no HF_TOKEN in $ENV_FILE" >&2; ex
 chmod 600 "$ENV_FILE"
 STATUS=failed
 UPID=
+TGPID=
+
+TG_TOKEN=$(sed -n 's/^TG_TOKEN=//p' "$ENV_FILE")
+TG_CHAT=$(sed -n 's/^TG_CHAT=//p' "$ENV_FILE")
+tg() {
+    [ -n "$TG_TOKEN" ] && [ -n "$TG_CHAT" ] || return 0
+    curl -fsS -m 30 "https://api.telegram.org/bot$TG_TOKEN/sendMessage" \
+        --data-urlencode "chat_id=$TG_CHAT" --data-urlencode "text=$1" > /dev/null || true
+}
+# run_hf binds it either way; empty means no per-step monitor.
+cp "$BASE/tg_monitor.py" "$WORK/tg_monitor.py" 2>/dev/null || : > "$WORK/tg_monitor.py"
 
 # Mirrors checkpoints to a public HF repo while training runs, so a dead node
 # loses at most one save interval. "sync" uploads every checkpoint except the
@@ -90,6 +102,9 @@ finish() {
     if [ -n "$UPID" ]; then
         pkill -P "$UPID" 2>/dev/null; kill "$UPID" 2>/dev/null; wait "$UPID" 2>/dev/null
     fi
+    if [ -n "$TGPID" ]; then
+        kill "$TGPID" 2>/dev/null; wait "$TGPID" 2>/dev/null
+    fi
     # Keep everything except intermediate checkpoints; the best one is kept.
     OUT=$WORK/mainwork/sft_pythia1b_short_full
     BEST=
@@ -113,6 +128,7 @@ finish() {
         echo "config_sha256: $(sha256sum "$WORK/mainwork/sft_pythia1b.yaml" 2>/dev/null | cut -d' ' -f1)"
         echo "base_model_revision: ${BASE_REV:-}"
         echo "best_checkpoint: ${BEST}"
+        echo "tg_monitor_sha256: $(sha256sum "$WORK/tg_monitor.py" 2>/dev/null | cut -d' ' -f1)"
         echo "slurm_log: $SLURM_SUBMIT_DIR/c2s-sft_$SLURM_JOB_ID.out"
         echo
         echo '## image build_info'
@@ -125,6 +141,16 @@ finish() {
     } > "$RUN/record.md"
     run_hf python /hf_sync.py final "${STAMP}_${SLUG}" >> "$RUN/hf_sync.log" 2>&1 \
         || echo "final HF upload failed, see hf_sync.log" >> "$RUN/record.md"
+    MSG="$([ "$STATUS" = completed ] && echo '✅' || echo '❌') ${STAMP}_${SLUG}: $STATUS"
+    MSG+=", $(( ($(date +%s) - T0) / 60 )) min, job $SLURM_JOB_ID"
+    [ -n "$BEST" ] && MSG+=$'\n'"best: $(basename "$BEST")"
+    if [ "$STATUS" != completed ]; then
+        LOG=$RUN/train.log
+        [ -s "$LOG" ] || LOG=$RUN/preprocess.log
+        [ -s "$LOG" ] || LOG=$SLURM_SUBMIT_DIR/c2s-sft_$SLURM_JOB_ID.out
+        MSG+=$'\n\n'"$(tail -c 3000 "$LOG" 2>/dev/null | tr '\r' '\n' | grep -v '^[[:space:]]*$' | tail -n 15)"
+    fi
+    tg "$MSG"
     rm -rf "$WORK"
 }
 trap finish EXIT
@@ -165,7 +191,8 @@ run() {
 run_hf() {
     apptainer exec --cleanenv --no-home --writable-tmpfs \
         --bind "$WORK/mainwork:/workspace/axolotl/mainwork" \
-        --bind "$WORK/hf_sync.py:/hf_sync.py" --bind "$RUN:/run_out" \
+        --bind "$WORK/hf_sync.py:/hf_sync.py" --bind "$WORK/tg_monitor.py:/tg_monitor.py" \
+        --bind "$RUN:/run_out" \
         --env-file "$ENV_FILE" --env HF_HOME=/tmp/hf_upload,HOME=/tmp \
         "$SIF" "$@"
 }
@@ -173,6 +200,8 @@ run_hf() {
 run cat /opt/c2s/build_info.txt > "$RUN/build_info.txt"
 run python -c "import torch; assert torch.cuda.is_available(); print(torch.__version__, torch.version.cuda, torch.cuda.get_device_name(0))" \
     | tee "$RUN/torch_check.txt"
+tg "▶️ ${STAMP}_${SLUG}: job $SLURM_JOB_ID on $(hostname)
+$(cat "$RUN/torch_check.txt")"
 
 # Logs go straight to the run dir so they can be followed live from a login node.
 # Background + wait: bash only handles the time-limit TERM between commands.
@@ -180,6 +209,11 @@ run axolotl preprocess mainwork/sft_pythia1b.yaml > "$RUN/preprocess.log" 2>&1 &
 PID=$!; wait $PID
 uploader &
 UPID=$!
+if [ -n "$TG_TOKEN" ] && [ -n "$TG_CHAT" ] && [ -s "$WORK/tg_monitor.py" ]; then
+    run_hf python /tg_monitor.py /workspace/axolotl/mainwork/sft_pythia1b_short_full "c2s Puma MIG" \
+        > "$RUN/tg_monitor.log" 2>&1 &
+    TGPID=$!
+fi
 run axolotl train mainwork/sft_pythia1b.yaml > "$RUN/train.log" 2>&1 &
 PID=$!; wait $PID
 STATUS=completed
