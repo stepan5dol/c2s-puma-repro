@@ -34,9 +34,60 @@ ln -sfn "$RUN" "$BASE/results/последний"
 mkdir -p "$WORK"/{mainwork/dataset,last_run_prepared,hf,triton}
 HF_TOKEN=$(cat ~/.cache/huggingface/token)
 STATUS=failed
+UPID=
+
+# Mirrors checkpoints to a private HF repo while training runs, so a dead node
+# loses at most one save interval. "sync" uploads every checkpoint except the
+# newest (it may still be written) and drops the ones the Trainer rotated away
+# (save_total_limit); "final" uploads the rest and the run dir.
+cat > "$WORK/hf_sync.py" <<'EOF'
+import os, re, sys
+from huggingface_hub import HfApi
+
+mode, run_name = sys.argv[1], sys.argv[2]
+repo, prefix = "dolzhenkosv/c2s-puma-runs", f"runs/{run_name}"
+out, run_dir = "/workspace/axolotl/mainwork/sft_pythia1b_short_full", "/run_out"
+done_file = f"{run_dir}/hf_uploaded.txt"
+api = HfApi()
+api.create_repo(repo, private=True, exist_ok=True)
+
+done = set(open(done_file).read().split()) if os.path.exists(done_file) else set()
+local = sorted((d for d in os.listdir(out) if re.fullmatch(r"checkpoint-\d+", d))
+               if os.path.isdir(out) else [], key=lambda d: int(d.split("-")[1]))
+ready = [d for d in (local[:-1] if mode == "sync" else local)
+         if os.path.exists(f"{out}/{d}/trainer_state.json")]
+
+for d in ready:
+    if d not in done:
+        api.upload_folder(folder_path=f"{out}/{d}", path_in_repo=f"{prefix}/{d}", repo_id=repo,
+                          commit_message=f"{run_name}: {d}")
+        done.add(d)
+        open(done_file, "a").write(d + "\n")
+        print("uploaded", d, flush=True)
+if mode == "sync":
+    for d in sorted(done - set(local)):
+        api.delete_folder(path_in_repo=f"{prefix}/{d}", repo_id=repo,
+                          commit_message=f"{run_name}: rotate out {d}")
+        done.discard(d)
+        open(done_file, "w").write("".join(x + "\n" for x in sorted(done)))
+        print("rotated out", d, flush=True)
+else:
+    api.upload_folder(folder_path=run_dir, path_in_repo=f"{prefix}/result", repo_id=repo,
+                      commit_message=f"{run_name}: result")
+    print("uploaded result", flush=True)
+EOF
+
+uploader() {
+    while sleep 300; do
+        run_hf python /hf_sync.py sync "${STAMP}_${SLUG}" >> "$RUN/hf_sync.log" 2>&1 || true
+    done
+}
 
 finish() {
     set +e
+    if [ -n "$UPID" ]; then
+        pkill -P "$UPID" 2>/dev/null; kill "$UPID" 2>/dev/null; wait "$UPID" 2>/dev/null
+    fi
     # Keep everything except intermediate checkpoints; the best one is kept.
     OUT=$WORK/mainwork/sft_pythia1b_short_full
     BEST=
@@ -70,6 +121,8 @@ finish() {
         echo
         echo '## author notes'
     } > "$RUN/record.md"
+    run_hf python /hf_sync.py final "${STAMP}_${SLUG}" >> "$RUN/hf_sync.log" 2>&1 \
+        || echo "final HF upload failed, see hf_sync.log" >> "$RUN/record.md"
     rm -rf "$WORK"
 }
 trap finish EXIT
@@ -106,6 +159,15 @@ run() {
         --pwd /workspace/axolotl "$SIF" "$@"
 }
 
+# Same container, plus the token and the run dir; only the uploader gets the token.
+run_hf() {
+    apptainer exec --cleanenv --no-home --writable-tmpfs \
+        --bind "$WORK/mainwork:/workspace/axolotl/mainwork" \
+        --bind "$WORK/hf_sync.py:/hf_sync.py" --bind "$RUN:/run_out" \
+        --env HF_TOKEN="$HF_TOKEN",HF_HOME=/tmp/hf_upload,HOME=/tmp \
+        "$SIF" "$@"
+}
+
 run cat /opt/c2s/build_info.txt > "$RUN/build_info.txt"
 run python -c "import torch; assert torch.cuda.is_available(); print(torch.__version__, torch.version.cuda, torch.cuda.get_device_name(0))" \
     | tee "$RUN/torch_check.txt"
@@ -114,6 +176,8 @@ run python -c "import torch; assert torch.cuda.is_available(); print(torch.__ver
 # Background + wait: bash only handles the time-limit TERM between commands.
 run axolotl preprocess mainwork/sft_pythia1b.yaml > "$RUN/preprocess.log" 2>&1 &
 PID=$!; wait $PID
+uploader &
+UPID=$!
 run axolotl train mainwork/sft_pythia1b.yaml > "$RUN/train.log" 2>&1 &
 PID=$!; wait $PID
 STATUS=completed
