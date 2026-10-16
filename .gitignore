@@ -1,0 +1,4 @@
+results/
+build/
+*.sif
+*.sif.part

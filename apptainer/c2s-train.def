@@ -1,0 +1,56 @@
+Bootstrap: docker
+# nvidia/cuda:13.0.0-devel-ubuntu22.04 -- nvcc V13.0.48, Ubuntu 22.04, as in env_snapshot/hardware_software.txt
+From: nvidia/cuda@sha256:1470d2d7904fac4e5cb3bdfd4993305c46d3ee76deb0213eaaf248e5cf9c7400
+
+%files
+    build/pip_freeze_pod.txt /opt/c2s/pip_freeze_pod.txt
+
+%post
+    set -eux
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update
+    apt-get install -y --no-install-recommends git curl ca-certificates build-essential ninja-build
+    rm -rf /var/lib/apt/lists/*
+
+    curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local/bin UV_NO_MODIFY_PATH=1 sh
+    export UV_PYTHON_INSTALL_DIR=/opt/python UV_LINK_MODE=copy UV_NO_CACHE=1
+    uv python install 3.12.13
+    uv venv --python 3.12.13 /opt/venv
+    export VIRTUAL_ENV=/opt/venv PATH=/opt/venv/bin:$PATH
+    IDX="--index-strategy unsafe-best-match --extra-index-url https://download.pytorch.org/whl/cu130"
+
+    cd /opt/c2s
+    # Lines that cannot be installed straight from the freeze are handled below.
+    grep -v -E '^(-e |flash-attn==|mamba-ssm==|cut-cross-entropy @)' pip_freeze_pod.txt > req_main.txt
+    grep -E '^(torch|setuptools|wheel|packaging|ninja|numpy|psutil)==' pip_freeze_pod.txt > req_build.txt
+    uv pip install --no-deps $IDX -r req_build.txt
+    uv pip install --no-deps --no-build-isolation $IDX -r req_main.txt
+
+    # Compiled from source, as on the pod (flash_attn_install.log). A100 only: sm_80.
+    export TORCH_CUDA_ARCH_LIST=8.0 FLASH_ATTN_CUDA_ARCHS=80 MAX_JOBS={{ MAX_JOBS }} NVCC_THREADS=2
+    uv pip install --no-deps --no-build-isolation flash-attn==2.8.3
+    uv pip install --no-deps --no-build-isolation mamba-ssm==2.3.2.post1
+    uv pip install --no-deps \
+        "cut-cross-entropy @ git+https://github.com/axolotl-ai-cloud/ml-cross-entropy.git@f2d026e6961cb4325a6e3d316461235aeeab0ac2"
+
+    # Same path and commit as on the pod: -e file:///workspace/axolotl @ 1855055
+    git clone https://github.com/axolotl-ai-cloud/axolotl.git /workspace/axolotl
+    git -C /workspace/axolotl checkout 1855055ed15ab1888614f0a1958bbdc7a722ef3b
+    uv pip install --no-deps --no-build-isolation -e /workspace/axolotl
+    # Bind points for the run (the image itself is read-only).
+    mkdir -p /workspace/axolotl/mainwork /workspace/axolotl/last_run_prepared
+
+    uv pip freeze > /opt/c2s/pip_freeze_image.txt
+    {
+        echo "repo_commit: {{ GIT_SHA }}"
+        echo "base: nvidia/cuda:13.0.0-devel-ubuntu22.04@sha256:1470d2d7904fac4e5cb3bdfd4993305c46d3ee76deb0213eaaf248e5cf9c7400"
+        echo "python: $(python -VV)"
+        echo "nvcc: $(nvcc --version | tail -1)"
+        echo "axolotl: $(git -C /workspace/axolotl rev-parse HEAD)"
+        echo "built: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    } > /opt/c2s/build_info.txt
+    rm -f req_main.txt req_build.txt
+
+%environment
+    export VIRTUAL_ENV=/opt/venv
+    export PATH=/opt/venv/bin:$PATH

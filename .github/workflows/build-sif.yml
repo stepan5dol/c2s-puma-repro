@@ -1,0 +1,73 @@
+name: build-sif
+
+on:
+  workflow_dispatch:
+
+env:
+  SNAPSHOT: https://huggingface.co/dolzhenkosv/c2s-pythia-1b-azithro-transfer/resolve/040f129aafc483852e54a7ccf078f7cc1a2286f5/env_snapshot
+  SIF_REPO: dolzhenkosv/c2s-puma-sif
+  SIF_NAME: c2s-train.sif
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Free disk (image + build tree need ~40 GB)
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          sudo mkdir -p /mnt/work && sudo chown "$USER" /mnt/work
+          df -h / /mnt
+
+      - uses: eWaterCycle/setup-apptainer@v2
+
+      - name: Fetch pod pip freeze (pinned revision)
+        run: |
+          mkdir -p build
+          curl -fsSL "$SNAPSHOT/pip_freeze.txt" -o build/pip_freeze_pod.txt
+          sha256sum build/pip_freeze_pod.txt
+
+      - name: Build
+        run: |
+          sudo -E env APPTAINER_TMPDIR=/mnt/work/tmp APPTAINER_CACHEDIR=/mnt/work/cache \
+            bash -c 'mkdir -p "$APPTAINER_TMPDIR" "$APPTAINER_CACHEDIR" && apptainer build \
+              --build-arg GIT_SHA=${{ github.sha }} --build-arg MAX_JOBS=3 \
+              /mnt/work/${{ env.SIF_NAME }} apptainer/c2s-train.def'
+          sudo chown "$USER" /mnt/work/${{ env.SIF_NAME }}
+
+      - name: Compare with pod environment
+        run: |
+          apptainer exec /mnt/work/$SIF_NAME cat /opt/c2s/build_info.txt | tee build/build_info.txt
+          apptainer exec /mnt/work/$SIF_NAME cat /opt/c2s/pip_freeze_image.txt > build/pip_freeze_image.txt
+          grep -q '^axolotl: 1855055ed15ab1888614f0a1958bbdc7a722ef3b$' build/build_info.txt
+          grep -q 'Python 3.12.13' build/build_info.txt
+          python3 scripts/compare_freeze.py build/pip_freeze_pod.txt build/pip_freeze_image.txt | tee build/freeze_diff.txt
+          (cd /mnt/work && sha256sum $SIF_NAME) | tee build/$SIF_NAME.sha256
+
+      - name: Keep build report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-report
+          path: build/
+
+      - name: Upload image to private HF repo
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          python3 -m pip install --quiet "huggingface_hub>=1.0"
+          python3 - <<'EOF'
+          import os
+          from huggingface_hub import HfApi
+          api = HfApi()
+          repo, sha = os.environ["SIF_REPO"], os.environ["GITHUB_SHA"]
+          api.create_repo(repo, private=True, exist_ok=True)
+          files = [(f"/mnt/work/{os.environ['SIF_NAME']}", os.environ["SIF_NAME"])] + [
+              (f"build/{f}", f) for f in os.listdir("build")
+          ]
+          for local, remote in files:
+              api.upload_file(path_or_fileobj=local, path_in_repo=remote, repo_id=repo,
+                              commit_message=f"build {sha[:7]}: {remote}")
+          EOF
