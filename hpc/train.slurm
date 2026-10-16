@@ -9,6 +9,7 @@
 #SBATCH --time=1-00:00:00
 #SBATCH --mail-type=END,FAIL
 #SBATCH --output=%x_%j.out
+#SBATCH --signal=B:TERM@900
 
 # Same training as dolzhenkosv/c2s-pythia-1b-azithro-transfer@040f129,
 # unmodified sft_pythia1b.yaml, on a Puma A100 MIG slice.
@@ -29,6 +30,7 @@ T0=$(date +%s)
 
 if [ -e "$RUN" ]; then echo "run dir exists: $RUN" >&2; exit 1; fi
 mkdir -p "$RUN" "$BASE/images"
+ln -sfn "$RUN" "$BASE/results/последний"
 mkdir -p "$WORK"/{mainwork/dataset,last_run_prepared,hf,triton}
 HF_TOKEN=$(cat ~/.cache/huggingface/token)
 STATUS=failed
@@ -47,7 +49,6 @@ finish() {
             rsync -a "$OUT/$(basename "$BEST")" "$RUN/sft_pythia1b_short_full/"
         fi
     fi
-    cp "$WORK"/mainwork/*.log "$RUN/" 2>/dev/null || true
     {
         echo "# ${STAMP}_${SLUG}"
         echo
@@ -69,10 +70,12 @@ finish() {
         echo
         echo '## author notes'
     } > "$RUN/record.md"
-    ln -sfn "$RUN" "$BASE/results/последний"
     rm -rf "$WORK"
 }
 trap finish EXIT
+# Sent 15 min before the time limit (--signal), so finish() has time to copy.
+PID=
+trap 'STATUS=timeout; [ -n "$PID" ] && kill "$PID" 2>/dev/null; exit 143' TERM
 
 # Image: download once, re-download when the published hash changes.
 curl -fsSL -H "Authorization: Bearer $HF_TOKEN" "$SIF_URL/c2s-train.sif.sha256" -o "$RUN/image.sha256"
@@ -107,6 +110,10 @@ run cat /opt/c2s/build_info.txt > "$RUN/build_info.txt"
 run python -c "import torch; assert torch.cuda.is_available(); print(torch.__version__, torch.version.cuda, torch.cuda.get_device_name(0))" \
     | tee "$RUN/torch_check.txt"
 
-run axolotl preprocess mainwork/sft_pythia1b.yaml 2>&1 | tee "$WORK/mainwork/preprocess.log"
-run axolotl train mainwork/sft_pythia1b.yaml 2>&1 | tee "$WORK/mainwork/train.log"
+# Logs go straight to the run dir so they can be followed live from a login node.
+# Background + wait: bash only handles the time-limit TERM between commands.
+run axolotl preprocess mainwork/sft_pythia1b.yaml > "$RUN/preprocess.log" 2>&1 &
+PID=$!; wait $PID
+run axolotl train mainwork/sft_pythia1b.yaml > "$RUN/train.log" 2>&1 &
+PID=$!; wait $PID
 STATUS=completed
