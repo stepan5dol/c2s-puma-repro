@@ -39,6 +39,7 @@ jobs:
 
       - name: Compare with pod environment
         run: |
+          set -o pipefail
           apptainer exec /mnt/work/$SIF_NAME cat /opt/c2s/build_info.txt | tee build/build_info.txt
           apptainer exec /mnt/work/$SIF_NAME cat /opt/c2s/pip_freeze_image.txt > build/pip_freeze_image.txt
           grep -q '^axolotl: 1855055ed15ab1888614f0a1958bbdc7a722ef3b$' build/build_info.txt

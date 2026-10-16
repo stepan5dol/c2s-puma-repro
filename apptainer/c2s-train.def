@@ -21,10 +21,12 @@ From: nvidia/cuda@sha256:1470d2d7904fac4e5cb3bdfd4993305c46d3ee76deb0213eaaf248e
 
     cd /opt/c2s
     # Lines that cannot be installed straight from the freeze are handled below.
-    grep -v -E '^(-e |flash-attn==|mamba-ssm==|cut-cross-entropy @)' pip_freeze_pod.txt > req_main.txt
+    grep -v -E '^(-e |flash-attn==|mamba-ssm==|cut-cross-entropy @|torchao==)' pip_freeze_pod.txt > req_main.txt
     grep -E '^(torch|setuptools|wheel|packaging|ninja|numpy|psutil)==' pip_freeze_pod.txt > req_build.txt
     uv pip install --no-deps $IDX -r req_build.txt
     uv pip install --no-deps --no-build-isolation $IDX -r req_main.txt
+    # The pod has the PyPI build (0.18.0); the cu130 index would give 0.18.0+cu130.
+    uv pip install --no-deps --index-url https://pypi.org/simple $(grep -E '^torchao==' pip_freeze_pod.txt)
 
     # The pod compiled flash-attn 2.8.3 from source (hours on a 4-core runner); this is the
     # same release prebuilt for torch 2.13 + cu130 + cp312, pinned by sha256.
