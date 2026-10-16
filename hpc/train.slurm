@@ -13,7 +13,7 @@
 
 # Same training as dolzhenkosv/c2s-pythia-1b-azithro-transfer@040f129,
 # unmodified sft_pythia1b.yaml, on a Puma A100 MIG slice.
-# Needs ~/.cache/huggingface/token with write access (checkpoint uploads).
+# Needs ~/c2s/c2s.env with HF_TOKEN=<write token> (checkpoint uploads only).
 
 set -euo pipefail
 
@@ -32,7 +32,9 @@ if [ -e "$RUN" ]; then echo "run dir exists: $RUN" >&2; exit 1; fi
 mkdir -p "$RUN" "$BASE/images"
 ln -sfn "$RUN" "$BASE/results/последний"
 mkdir -p "$WORK"/{mainwork/dataset,last_run_prepared,hf,triton}
-HF_TOKEN=$(cat ~/.cache/huggingface/token)
+ENV_FILE=$BASE/c2s.env
+grep -q '^HF_TOKEN=hf_' "$ENV_FILE" || { echo "no HF_TOKEN in $ENV_FILE" >&2; exit 1; }
+chmod 600 "$ENV_FILE"
 STATUS=failed
 UPID=
 
@@ -131,9 +133,9 @@ PID=
 trap 'STATUS=timeout; [ -n "$PID" ] && kill "$PID" 2>/dev/null; exit 143' TERM
 
 # Image: download once, re-download when the published hash changes.
-curl -fsSL -H "Authorization: Bearer $HF_TOKEN" "$SIF_URL/c2s-train.sif.sha256" -o "$RUN/image.sha256"
+curl -fsSL "$SIF_URL/c2s-train.sif.sha256" -o "$RUN/image.sha256"
 if ! (cd "$BASE/images" && sha256sum -c --quiet "$RUN/image.sha256" 2>/dev/null); then
-    curl -fL -H "Authorization: Bearer $HF_TOKEN" "$SIF_URL/c2s-train.sif" -o "$SIF.part"
+    curl -fL "$SIF_URL/c2s-train.sif" -o "$SIF.part"
     mv "$SIF.part" "$SIF"
     (cd "$BASE/images" && sha256sum -c "$RUN/image.sha256")
 fi
@@ -164,7 +166,7 @@ run_hf() {
     apptainer exec --cleanenv --no-home --writable-tmpfs \
         --bind "$WORK/mainwork:/workspace/axolotl/mainwork" \
         --bind "$WORK/hf_sync.py:/hf_sync.py" --bind "$RUN:/run_out" \
-        --env HF_TOKEN="$HF_TOKEN",HF_HOME=/tmp/hf_upload,HOME=/tmp \
+        --env-file "$ENV_FILE" --env HF_HOME=/tmp/hf_upload,HOME=/tmp \
         "$SIF" "$@"
 }
 

@@ -2,3 +2,4 @@ results/
 build/
 *.sif
 *.sif.part
+*.env
