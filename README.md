@@ -7,5 +7,6 @@ original ones, verified by sha256 against `env_snapshot/inputs_sha256.txt`.
 - `apptainer/c2s-train.def`: image built from the pod's `env_snapshot/pip_freeze.txt`
   (nvidia/cuda 13.0.0 devel, Python 3.12.13, axolotl 1855055).
 - `.github/workflows/build-sif.yml`: builds the image (manual run), compares its freeze with
-  the pod's and uploads it to the private HF repo `dolzhenkosv/c2s-puma-sif`.
-- `hpc/train.slurm`: the run on Puma. Output goes to `~/c2s/results/<stamp>_puma-a100mig-repro/`.
+  the pod's and uploads it to the public HF repo `dolzhenkosv/c2s-puma-sif`.
+- `hpc/train.slurm`: the run on Puma. Output goes to `~/c2s/results/<stamp>_puma-a100mig-repro/`;
+  checkpoints are mirrored to the public HF repo `dolzhenkosv/c2s-puma-runs` during training.

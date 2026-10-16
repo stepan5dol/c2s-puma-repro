@@ -13,7 +13,7 @@
 
 # Same training as dolzhenkosv/c2s-pythia-1b-azithro-transfer@040f129,
 # unmodified sft_pythia1b.yaml, on a Puma A100 MIG slice.
-# Needs ~/.cache/huggingface/token (read access to the private image repo).
+# Needs ~/.cache/huggingface/token with write access (checkpoint uploads).
 
 set -euo pipefail
 
@@ -36,7 +36,7 @@ HF_TOKEN=$(cat ~/.cache/huggingface/token)
 STATUS=failed
 UPID=
 
-# Mirrors checkpoints to a private HF repo while training runs, so a dead node
+# Mirrors checkpoints to a public HF repo while training runs, so a dead node
 # loses at most one save interval. "sync" uploads every checkpoint except the
 # newest (it may still be written) and drops the ones the Trainer rotated away
 # (save_total_limit); "final" uploads the rest and the run dir.
@@ -49,7 +49,7 @@ repo, prefix = "dolzhenkosv/c2s-puma-runs", f"runs/{run_name}"
 out, run_dir = "/workspace/axolotl/mainwork/sft_pythia1b_short_full", "/run_out"
 done_file = f"{run_dir}/hf_uploaded.txt"
 api = HfApi()
-api.create_repo(repo, private=True, exist_ok=True)
+api.create_repo(repo, private=False, exist_ok=True)
 
 done = set(open(done_file).read().split()) if os.path.exists(done_file) else set()
 local = sorted((d for d in os.listdir(out) if re.fullmatch(r"checkpoint-\d+", d))

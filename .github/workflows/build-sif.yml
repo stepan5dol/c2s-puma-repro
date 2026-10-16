@@ -53,7 +53,7 @@ jobs:
           name: build-report
           path: build/
 
-      - name: Upload image to private HF repo
+      - name: Upload image to public HF repo
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
@@ -63,7 +63,7 @@ jobs:
           from huggingface_hub import HfApi
           api = HfApi()
           repo, sha = os.environ["SIF_REPO"], os.environ["GITHUB_SHA"]
-          api.create_repo(repo, private=True, exist_ok=True)
+          api.create_repo(repo, private=False, exist_ok=True)
           files = [(f"/mnt/work/{os.environ['SIF_NAME']}", os.environ["SIF_NAME"])] + [
               (f"build/{f}", f) for f in os.listdir("build")
           ]
