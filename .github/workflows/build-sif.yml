@@ -11,7 +11,7 @@ env:
 jobs:
   build:
     runs-on: ubuntu-24.04
-    timeout-minutes: 360
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
 
@@ -33,7 +33,7 @@ jobs:
         run: |
           sudo -E env APPTAINER_TMPDIR=/mnt/work/tmp APPTAINER_CACHEDIR=/mnt/work/cache \
             bash -c 'mkdir -p "$APPTAINER_TMPDIR" "$APPTAINER_CACHEDIR" && apptainer build \
-              --build-arg GIT_SHA=${{ github.sha }} --build-arg MAX_JOBS=3 \
+              --build-arg GIT_SHA=${{ github.sha }} \
               /mnt/work/${{ env.SIF_NAME }} apptainer/c2s-train.def'
           sudo chown "$USER" /mnt/work/${{ env.SIF_NAME }}
 
