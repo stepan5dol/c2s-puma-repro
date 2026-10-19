@@ -47,11 +47,15 @@ From: nvidia/cuda@sha256:1470d2d7904fac4e5cb3bdfd4993305c46d3ee76deb0213eaaf248e
 
     uv pip freeze > /opt/c2s/pip_freeze_image.txt
 
-    grep -v -E '^(deep_ep @|python-apt==|dbus-python==|PyGObject==|vllm @)' pip_freeze_infer_pod.txt > req_infer.txt
+    grep -v -E '^(deep_ep @|python-apt==|dbus-python==|PyGObject==|iotop==|vllm @|flashinfer-cubin==|flashinfer-jit-cache==)' \
+        pip_freeze_infer_pod.txt > req_infer.txt
     echo "vllm==$(sed -n 's|^vllm @ .*/vllm-\([^-]*\)-.*|\1|p' pip_freeze_infer_pod.txt)" >> req_infer.txt
     uv venv --python 3.12.13 /opt/infer
-    uv pip install --python /opt/infer/bin/python --no-deps $IDX \
-        --extra-index-url https://flashinfer.ai/whl/cu130 -r req_infer.txt
+    uv pip install --python /opt/infer/bin/python --no-deps $IDX -r req_infer.txt
+    uv pip install --python /opt/infer/bin/python --no-deps --index-url https://flashinfer.ai/whl/cu130 \
+        $(grep -E '^flashinfer-jit-cache==' pip_freeze_infer_pod.txt)
+    uv pip install --python /opt/infer/bin/python --no-deps --index-url https://flashinfer.ai/whl \
+        $(grep -E '^flashinfer-cubin==' pip_freeze_infer_pod.txt)
     /opt/infer/bin/python -c "import vllm; from vllm.inputs import TokensPrompt; print('vllm', vllm.__version__)"
     /opt/infer/bin/python -m py_compile /opt/c2s/run_test.py /opt/c2s/run_azi.py
     uv pip freeze --python /opt/infer/bin/python > /opt/c2s/pip_freeze_infer_image.txt

@@ -12,7 +12,7 @@ source repo's list before training.
     not installed.
   - `/opt/infer` (`apptainer run --app infer`): vLLM 0.30.0, built from the inference pod's
     `inference_ckpt264_2026-10-05/env_snapshot/pip_freeze.txt`. Not installed: deep_ep (local
-    wheel, MoE only), python-apt, dbus-python, PyGObject (Ubuntu system packages).
+    wheel, MoE only), python-apt, dbus-python, PyGObject, iotop (Ubuntu system packages).
 - `scripts/finalize_best.py` (in the image): after training, replaces the final model in the
   output dir with the weights of the best checkpoint and checks them by sha256. Needed because
   with this transformers version `load_best_model_at_end` does not load `embed_out.weight`

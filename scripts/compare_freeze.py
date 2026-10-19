@@ -9,6 +9,7 @@ ALLOWED = {
     "python-apt": ("2.7.7+ubuntu5.3", None),
     "dbus-python": ("1.3.2", None),
     "pygobject": ("3.48.2", None),
+    "iotop": ("0.6", None),
 }
 
 
