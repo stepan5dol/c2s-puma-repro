@@ -1,16 +1,9 @@
-"""Compare the image's pip freeze with the pod's env_snapshot/pip_freeze.txt.
-
-Exit 1 if any package is missing, extra or at a different version, except the
-differences listed in ALLOWED (pod version, image version), which are printed.
-"""
 import re
 import sys
 from urllib.parse import unquote
 
 ALLOWED = {
-    # same release, prebuilt wheel instead of the pod's source build
     "flash-attn": ("2.8.3", "2.8.3+cu130torch2.13"),
-    # not used by Pythia; no prebuilt wheel for torch 2.13
     "mamba-ssm": ("2.3.2.post1", None),
 }
 
@@ -22,7 +15,6 @@ def parse(path):
         if not line or line.startswith("#"):
             continue
         if line.startswith("-e "):
-            # editable axolotl: checked by commit in build_info.txt
             pkgs["axolotl"] = "editable"
             continue
         m = re.match(r"^([A-Za-z0-9_.\-]+)\s*(?:==\s*(\S+)|@\s*(\S+))$", line)

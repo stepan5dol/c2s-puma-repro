@@ -13,6 +13,23 @@ jobs:
         run: |
           bash -n hpc/train.slurm
           python3 -m py_compile scripts/*.py
-          # hf_sync.py is embedded in train.slurm as a heredoc
           sed -n "/<<'EOF'$/,/^EOF$/p" hpc/train.slurm | sed '1d;$d' > /tmp/hf_sync.py
           python3 -m py_compile /tmp/hf_sync.py
+      - name: finalize_best.py on a fake run
+        run: |
+          set -eux
+          o=/tmp/fake
+          mkdir -p $o/checkpoint-33 $o/checkpoint-66 $o/checkpoint-99
+          echo best > $o/checkpoint-33/model.safetensors
+          echo late > $o/checkpoint-66/model.safetensors
+          echo mixed > $o/model.safetensors
+          echo '{"best_model_checkpoint": null}' > $o/checkpoint-33/trainer_state.json
+          echo '{"best_model_checkpoint": "/workspace/out/checkpoint-33"}' > $o/checkpoint-66/trainer_state.json
+          test "$(python3 scripts/finalize_best.py $o)" = checkpoint-33
+          cmp $o/model.safetensors $o/checkpoint-33/model.safetensors
+          test "$(cat $o/best_checkpoint.txt)" = checkpoint-33
+          rm $o/model.safetensors
+          test "$(python3 scripts/finalize_best.py $o)" = checkpoint-33
+          test ! -e $o/model.safetensors
+          rm $o/checkpoint-*/trainer_state.json
+          ! python3 scripts/finalize_best.py $o

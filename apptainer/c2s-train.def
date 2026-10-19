@@ -1,9 +1,9 @@
 Bootstrap: docker
-# nvidia/cuda:13.0.0-devel-ubuntu22.04 -- nvcc V13.0.48, Ubuntu 22.04, as in env_snapshot/hardware_software.txt
 From: nvidia/cuda@sha256:1470d2d7904fac4e5cb3bdfd4993305c46d3ee76deb0213eaaf248e5cf9c7400
 
 %files
     build/pip_freeze_pod.txt /opt/c2s/pip_freeze_pod.txt
+    scripts/finalize_best.py /opt/c2s/finalize_best.py
 
 %post
     set -eux
@@ -20,17 +20,12 @@ From: nvidia/cuda@sha256:1470d2d7904fac4e5cb3bdfd4993305c46d3ee76deb0213eaaf248e
     IDX="--index-strategy unsafe-best-match --extra-index-url https://download.pytorch.org/whl/cu130"
 
     cd /opt/c2s
-    # Lines that cannot be installed straight from the freeze are handled below.
     grep -v -E '^(-e |flash-attn==|mamba-ssm==|cut-cross-entropy @|torchao==)' pip_freeze_pod.txt > req_main.txt
     grep -E '^(torch|setuptools|wheel|packaging|ninja|numpy|psutil)==' pip_freeze_pod.txt > req_build.txt
     uv pip install --no-deps $IDX -r req_build.txt
     uv pip install --no-deps --no-build-isolation $IDX -r req_main.txt
-    # The pod has the PyPI build (0.18.0); the cu130 index would give 0.18.0+cu130.
     uv pip install --no-deps --index-url https://pypi.org/simple $(grep -E '^torchao==' pip_freeze_pod.txt)
 
-    # The pod compiled flash-attn 2.8.3 from source (hours on a 4-core runner); this is the
-    # same release prebuilt for torch 2.13 + cu130 + cp312, pinned by sha256.
-    # mamba-ssm is left out: Pythia does not use it and there is no prebuilt wheel for torch 2.13.
     FA_WHL=flash_attn-2.8.3+cu130torch2.13-cp312-cp312-linux_x86_64.whl
     curl -fsSL -o "/tmp/$FA_WHL" \
         "https://github.com/mjun0812/flash-attention-prebuild-wheels/releases/download/v0.9.47/flash_attn-2.8.3%2Bcu130torch2.13-cp312-cp312-linux_x86_64.whl"
@@ -41,12 +36,11 @@ From: nvidia/cuda@sha256:1470d2d7904fac4e5cb3bdfd4993305c46d3ee76deb0213eaaf248e
     uv pip install --no-deps \
         "cut-cross-entropy @ git+https://github.com/axolotl-ai-cloud/ml-cross-entropy.git@f2d026e6961cb4325a6e3d316461235aeeab0ac2"
 
-    # Same path and commit as on the pod: -e file:///workspace/axolotl @ 1855055
     git clone https://github.com/axolotl-ai-cloud/axolotl.git /workspace/axolotl
     git -C /workspace/axolotl checkout 1855055ed15ab1888614f0a1958bbdc7a722ef3b
     uv pip install --no-deps --no-build-isolation -e /workspace/axolotl
-    # Bind points for the run (the image itself is read-only).
     mkdir -p /workspace/axolotl/mainwork /workspace/axolotl/last_run_prepared
+    python -m py_compile /opt/c2s/finalize_best.py
 
     uv pip freeze > /opt/c2s/pip_freeze_image.txt
     {
@@ -55,6 +49,7 @@ From: nvidia/cuda@sha256:1470d2d7904fac4e5cb3bdfd4993305c46d3ee76deb0213eaaf248e
         echo "python: $(python -VV)"
         echo "nvcc: $(nvcc --version | tail -1)"
         echo "axolotl: $(git -C /workspace/axolotl rev-parse HEAD)"
+        echo "finalize_best: $(sha256sum /opt/c2s/finalize_best.py | cut -d' ' -f1)"
         echo "built: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
     } > /opt/c2s/build_info.txt
     rm -f req_main.txt req_build.txt

@@ -11,11 +11,6 @@
 #SBATCH --output=%x_%j.out
 #SBATCH --signal=B:TERM@900
 
-# Same training as dolzhenkosv/c2s-pythia-1b-azithro-transfer@040f129,
-# unmodified sft_pythia1b.yaml, on a Puma A100 MIG slice.
-# Needs ~/c2s/c2s.env with HF_TOKEN=<write token> (checkpoint uploads only).
-# Optional: TG_TOKEN and TG_CHAT there plus ~/c2s/tg_monitor.py for Telegram updates.
-
 set -euo pipefail
 
 STAMP=$(date +%Y-%m-%d_%H%M)
@@ -47,13 +42,8 @@ tg() {
     curl -fsS -m 30 "https://api.telegram.org/bot$TG_TOKEN/sendMessage" \
         --data-urlencode "chat_id=$TG_CHAT" --data-urlencode "text=$1" > /dev/null || true
 }
-# run_hf binds it either way; empty means no per-step monitor.
 cp "$BASE/tg_monitor.py" "$WORK/tg_monitor.py" 2>/dev/null || : > "$WORK/tg_monitor.py"
 
-# Mirrors checkpoints to a public HF repo while training runs, so a dead node
-# loses at most one save interval. "sync" uploads every checkpoint except the
-# newest (it may still be written) and drops the ones the Trainer rotated away
-# (save_total_limit); "final" uploads the rest and the run dir.
 cat > "$WORK/hf_sync.py" <<'EOF'
 import os, re, sys
 from huggingface_hub import HfApi
@@ -105,16 +95,19 @@ finish() {
     if [ -n "$TGPID" ]; then
         kill "$TGPID" 2>/dev/null; wait "$TGPID" 2>/dev/null
     fi
-    # Keep everything except intermediate checkpoints; the best one is kept.
     OUT=$WORK/mainwork/sft_pythia1b_short_full
     BEST=
     BASE_REV=$(cat "$WORK"/hf/hub/models--vandijklab--C2S-Scale-Pythia-1b-pt/refs/main 2>/dev/null)
     if [ -d "$OUT" ]; then
-        BEST=$(python3 -c "import json,sys;print(json.load(open(sys.argv[1])).get('best_model_checkpoint') or '')" \
-            "$OUT/trainer_state.json" 2>/dev/null || true)
+        BEST=$(run python /opt/c2s/finalize_best.py mainwork/sft_pythia1b_short_full \
+            2>> "$RUN/finalize_best.log")
+        if [ -z "$BEST" ] && [ "$STATUS" = completed ]; then
+            STATUS=failed
+            echo "finalize_best.py failed" >> "$RUN/finalize_best.log"
+        fi
         rsync -a --exclude 'checkpoint-*' "$OUT/" "$RUN/sft_pythia1b_short_full/"
         if [ -n "$BEST" ]; then
-            rsync -a "$OUT/$(basename "$BEST")" "$RUN/sft_pythia1b_short_full/"
+            rsync -a "$OUT/$BEST" "$RUN/sft_pythia1b_short_full/"
         fi
     fi
     {
@@ -128,6 +121,7 @@ finish() {
         echo "config_sha256: $(sha256sum "$WORK/mainwork/sft_pythia1b.yaml" 2>/dev/null | cut -d' ' -f1)"
         echo "base_model_revision: ${BASE_REV:-}"
         echo "best_checkpoint: ${BEST}"
+        echo "final_model_sha256: $(sha256sum "$RUN/sft_pythia1b_short_full/model.safetensors" 2>/dev/null | cut -d' ' -f1)"
         echo "tg_monitor_sha256: $(sha256sum "$WORK/tg_monitor.py" 2>/dev/null | cut -d' ' -f1)"
         echo "slurm_log: $SLURM_SUBMIT_DIR/c2s-sft_$SLURM_JOB_ID.out"
         echo
@@ -143,7 +137,7 @@ finish() {
         || echo "final HF upload failed, see hf_sync.log" >> "$RUN/record.md"
     MSG="$([ "$STATUS" = completed ] && echo '✅' || echo '❌') ${STAMP}_${SLUG}: $STATUS"
     MSG+=", $(( ($(date +%s) - T0) / 60 )) min, job $SLURM_JOB_ID"
-    [ -n "$BEST" ] && MSG+=$'\n'"best: $(basename "$BEST")"
+    [ -n "$BEST" ] && MSG+=$'\n'"best: $BEST"
     if [ "$STATUS" != completed ]; then
         LOG=$RUN/train.log
         [ -s "$LOG" ] || LOG=$RUN/preprocess.log
@@ -154,11 +148,9 @@ finish() {
     rm -rf "$WORK"
 }
 trap finish EXIT
-# Sent 15 min before the time limit (--signal), so finish() has time to copy.
 PID=
 trap 'STATUS=timeout; [ -n "$PID" ] && kill "$PID" 2>/dev/null; exit 143' TERM
 
-# Image: download once, re-download when the published hash changes.
 curl -fsSL "$SIF_URL/c2s-train.sif.sha256" -o "$RUN/image.sha256"
 if ! (cd "$BASE/images" && sha256sum -c --quiet "$RUN/image.sha256" 2>/dev/null); then
     curl -fL "$SIF_URL/c2s-train.sif" -o "$SIF.part"
@@ -166,7 +158,6 @@ if ! (cd "$BASE/images" && sha256sum -c --quiet "$RUN/image.sha256" 2>/dev/null)
     (cd "$BASE/images" && sha256sum -c "$RUN/image.sha256")
 fi
 
-# Original config and data from the pinned revision, checked against the run's own hashes.
 curl -fsSL "$SRC/env_snapshot/inputs_sha256.txt" -o "$RUN/inputs_sha256_pod.txt"
 curl -fsSL "$SRC/sft_pythia1b.yaml" -o "$WORK/mainwork/sft_pythia1b.yaml"
 for f in train_segments.jsonl valid_segments.jsonl; do
@@ -187,7 +178,6 @@ run() {
         --pwd /workspace/axolotl "$SIF" "$@"
 }
 
-# Same container, plus the token and the run dir; only the uploader gets the token.
 run_hf() {
     apptainer exec --cleanenv --no-home --writable-tmpfs \
         --bind "$WORK/mainwork:/workspace/axolotl/mainwork" \
@@ -198,13 +188,12 @@ run_hf() {
 }
 
 run cat /opt/c2s/build_info.txt > "$RUN/build_info.txt"
+run test -f /opt/c2s/finalize_best.py
 run python -c "import torch; assert torch.cuda.is_available(); print(torch.__version__, torch.version.cuda, torch.cuda.get_device_name(0))" \
     | tee "$RUN/torch_check.txt"
 tg "▶️ ${STAMP}_${SLUG}: job $SLURM_JOB_ID on $(hostname)
 $(cat "$RUN/torch_check.txt")"
 
-# Logs go straight to the run dir so they can be followed live from a login node.
-# Background + wait: bash only handles the time-limit TERM between commands.
 run axolotl preprocess mainwork/sft_pythia1b.yaml > "$RUN/preprocess.log" 2>&1 &
 PID=$!; wait $PID
 uploader &

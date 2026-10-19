@@ -1,15 +1,3 @@
-#!/usr/bin/env python3
-"""
-Telegram monitor for the axolotl run in hpc/train.slurm.
-Adapted from tg_monitor_sft.py (dolzhenkosv/c2s-grpo-run1). Reads TensorBoard
-events from the output dir, sends a compact line per step and an eval line +
-chart per eval.
-
-Needs TG_TOKEN and TG_CHAT in the environment (~/c2s/c2s.env).
-
-Usage:
-    python tg_monitor.py <output_dir> <title>
-"""
 from __future__ import annotations
 
 import io
@@ -31,11 +19,7 @@ TITLE     = sys.argv[2] if len(sys.argv) > 2 else "SFT"
 TRAIN_LOG = "/run_out/train.log"
 
 TREND_W       = 10
-POLL_INTERVAL = 60    # seconds
-
-
-# ── Telegram helpers ──────────────────────────────────────────────────────────
-
+POLL_INTERVAL = 60
 def _tg(method, **kwargs):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/{method}"
     try:
@@ -52,12 +36,7 @@ def send_photo(buf: io.BytesIO, caption: str = ""):
     buf.seek(0)
     _tg("sendPhoto", data={"chat_id": CHAT_ID, "caption": caption},
         files={"photo": ("plot.png", buf, "image/png")})
-
-
-# ── Max steps ─────────────────────────────────────────────────────────────────
-
 def max_steps() -> int | None:
-    """From the newest checkpoint's trainer_state.json, else the last tqdm total in train.log."""
     states = sorted(Path(LOG_DIR).glob("checkpoint-*/trainer_state.json"),
                     key=lambda p: int(p.parent.name.split("-")[1]))
     if states:
@@ -74,10 +53,6 @@ def max_steps() -> int | None:
         return totals[-1] if totals else None
     except OSError:
         return None
-
-
-# ── TensorBoard reader ────────────────────────────────────────────────────────
-
 def read_tb(log_dir: str) -> dict:
     try:
         from tensorboard.backend.event_processing.event_accumulator import EventAccumulator
@@ -94,10 +69,6 @@ def read_tb(log_dir: str) -> dict:
         events = ea.Scalars(tag)
         data[tag] = {"steps": [e.step for e in events], "values": [e.value for e in events]}
     return data
-
-
-# ── Helpers ───────────────────────────────────────────────────────────────────
-
 def _rolling(vals: list, w: int = TREND_W):
     if not vals:
         return None, None
@@ -110,20 +81,14 @@ def _trend(vals: list, w: int = TREND_W):
     return float(np.mean(vals[-w:]) - np.mean(vals[-w * 2:-w]))
 
 def smooth(vals: list, w: int = 20) -> list:
-    """Causal rolling mean — no edge artifacts, no future leakage."""
     arr = np.array(vals, dtype=float)
     cs = np.cumsum(arr)
     cs[w:] = cs[w:] - cs[:-w]
     counts = np.minimum(np.arange(1, len(arr) + 1), w)
     return list(cs / counts)
-
-
-# ── Analysis ──────────────────────────────────────────────────────────────────
-
 def analyze(data: dict) -> dict:
     info: dict = {}
 
-    # current step — prefer train/loss, fallback to lr
     for key in ("train/loss", "train/learning_rate"):
         if key in data and data[key]["steps"]:
             info["step"] = data[key]["steps"][-1]
@@ -146,10 +111,6 @@ def analyze(data: dict) -> dict:
             info[f"{short}_trend"] = _trend(vals)
 
     return info
-
-
-# ── Plot ──────────────────────────────────────────────────────────────────────
-
 def _plot_ax(ax, data: dict, tag: str, label: str, color: str, yrange=None):
     ax.set_facecolor("#1f2937")
     if tag not in data or not data[tag]["values"]:
@@ -158,7 +119,6 @@ def _plot_ax(ax, data: dict, tag: str, label: str, color: str, yrange=None):
     steps  = data[tag]["steps"]
     values = data[tag]["values"]
     if tag == "eval/loss" or len(values) < 15:
-        # eval — always dots + line, drop step-0 outlier, zoom to interesting range
         plot_steps = steps[:]
         plot_vals  = values[:]
         if len(plot_vals) >= 2 and plot_vals[0] > plot_vals[1] * 2:
@@ -173,7 +133,6 @@ def _plot_ax(ax, data: dict, tag: str, label: str, color: str, yrange=None):
         sm = smooth(values)
         ax.plot(steps, values, color=color, linewidth=0.5, alpha=0.25)
         ax.plot(steps, sm,     color=color, linewidth=2.0)
-        # zoom past initial spike: if max >> p95, focus on stable range
         if not yrange and len(values) > 50:
             p5  = float(np.percentile(values, 5))
             p95 = float(np.percentile(values, 95))
@@ -215,10 +174,6 @@ def make_plot(data: dict, step: int, total: int | None) -> io.BytesIO | None:
                 facecolor=fig.get_facecolor())
     plt.close(fig)
     return buf
-
-
-# ── Report text ───────────────────────────────────────────────────────────────
-
 def format_step_line(data: dict, step: int, total: int | None, elapsed_h: float) -> str:
     def at(key):
         d = data.get(key, {})
@@ -265,7 +220,6 @@ def format_eval_line(data: dict) -> str:
     best = min(vals)
     best_str = f"\nлучший <code>{best:.4f}</code> @ step {steps[vals.index(best)]}"
 
-    # plateau: last 3 evals moved < 0.01 each
     plateau = ""
     if len(vals) >= 4:
         deltas = [abs(vals[i] - vals[i-1]) for i in range(-3, 0)]
@@ -273,10 +227,6 @@ def format_eval_line(data: dict) -> str:
             plateau = "\n⚠️ <b>Плато</b> — eval не двигается 3 точки подряд"
 
     return f"📊 <b>Eval @ step {cur_step}</b>  loss = <code>{cur_val:.4f}</code>{delta_str}{best_str}{plateau}"
-
-
-# ── Main loop ─────────────────────────────────────────────────────────────────
-
 def main():
     print(f"[tg-monitor] started, watching {LOG_DIR}", flush=True)
     last_sent_step = -1
@@ -301,17 +251,15 @@ def main():
             total = max_steps()
             elapsed_h = (time.time() - start_time) / 3600
 
-            # ── training steps ──
             if isinstance(current_step, int) and current_step > last_sent_step:
                 if "train/loss" in data:
                     new_steps = [s for s in data["train/loss"]["steps"] if s > last_sent_step]
                     for s in new_steps:
                         send_text(format_step_line(data, s, total, elapsed_h))
                         print(f"[tg-monitor] step {s}", flush=True)
-                        time.sleep(0.5)   # avoid Telegram flood
+                        time.sleep(0.5)
                     last_sent_step = current_step
 
-            # ── eval results — sent when they actually appear in TB ──
             ev_steps = data.get("eval/loss", {}).get("steps", [])
             new_evals = [s for s in ev_steps if s > last_eval_sent and s > 0]
             for es in new_evals:
