@@ -42,8 +42,11 @@ sbatch --time=3-00:00:00 --export=ALL,MODEL=gemma2b train.slurm          # Gemma
 sbatch --time=3-00:00:00 --export=ALL,MODEL=gemma2b,INFER=1 train.slurm  # + inference on test
 ```
 
-`INFER=1` runs `run_test.py` on `test_segments.jsonl` with the best checkpoint at temperatures
-`INFER_TEMPS` (default `0.8 1.0 1.2`); results go to `inference/` in the run dir.
+`INFER=1` runs, with the best checkpoint, `run_test.py` on `test_segments.jsonl` at temperatures
+`INFER_TEMPS` (default `1.0 0.8 1.2`) and `run_azi.py` on the three azithromycin prompt sets
+at `AZI_TEMP` (default `1.0`), as in `inference_ckpt264_2026-10-05`. The prompt sets are in
+`dolzhenkosv/c2s-gemma2-2b-azithro-transfer/inference/`, sha256 as in that run's snapshot.
+Results go to `inference/` in the run dir.
 
 The run of 2026-10-17 (`runs/2026-10-17_0244_puma-a100mig-repro`) predates the fix: its
 `result/sft_pythia1b_short_full/model.safetensors` is checkpoint-264 with `embed_out.weight`

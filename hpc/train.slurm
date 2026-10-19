@@ -15,7 +15,10 @@ set -euo pipefail
 
 MODEL=${MODEL:-pythia1b}
 INFER=${INFER:-0}
-INFER_TEMPS=${INFER_TEMPS:-0.8 1.0 1.2}
+INFER_TEMPS=${INFER_TEMPS:-1.0 0.8 1.2}
+AZI_TEMP=${AZI_TEMP:-1.0}
+AZI_SETS="inference_azi inference_azi_concise inference_azi_ratmatch"
+AZI_SRC=https://huggingface.co/dolzhenkosv/c2s-gemma2-2b-azithro-transfer/resolve/be9e317b2791e2518308dfdc211342815ced72de
 case $MODEL in
     pythia1b)
         SLUG=puma-a100mig-repro
@@ -158,7 +161,7 @@ finish() {
         echo "base_model_revision: ${BASE_REV:-}"
         echo "best_checkpoint: ${BEST}"
         echo "final_model_sha256: $(cat "$RUN/$OUTNAME"/model*.safetensors 2>/dev/null | sha256sum | cut -d' ' -f1)"
-        echo "inference: $INFER_STATUS ($INFER_TEMPS)"
+        echo "inference: $INFER_STATUS (test at $INFER_TEMPS, azithromycin at $AZI_TEMP)"
         echo "tg_monitor_sha256: $(sha256sum "$WORK/tg_monitor.py" 2>/dev/null | cut -d' ' -f1)"
         echo "slurm_log: $SLURM_SUBMIT_DIR/c2s-sft_$SLURM_JOB_ID.out"
         echo
@@ -204,6 +207,14 @@ for f in $FILES; do
     grep -E "^[0-9a-f]{64}  $f\$" "$RUN/inputs_sha256_source.txt" >> "$RUN/inputs_sha256.txt"
 done
 [ "$(wc -l < "$RUN/inputs_sha256.txt")" -eq "$(echo $FILES | wc -w)" ]
+if [ "$INFER" = 1 ]; then
+    mkdir -p "$WORK/mainwork/inference"
+    curl -fsSL -H @"$HF_AUTH" "$AZI_SRC/inference/sha256.txt" -o "$RUN/inference_inputs_source.txt"
+    for n in $AZI_SETS; do
+        curl -fsSL -H @"$HF_AUTH" "$AZI_SRC/inference/$n.jsonl" -o "$WORK/mainwork/inference/$n.jsonl"
+        grep -E "^[0-9a-f]{64}  inference/$n.jsonl\$" "$RUN/inference_inputs_source.txt" >> "$RUN/inputs_sha256.txt"
+    done
+fi
 (cd "$WORK/mainwork" && sha256sum -c "$RUN/inputs_sha256.txt")
 cp "$WORK/mainwork/$CFG" "$RUN/"
 
@@ -284,6 +295,12 @@ if [ "$INFER" = 1 ]; then
         tag=t$(echo "$t" | tr -d .)
         run_infer "MODEL_DIR=/workspace/axolotl/mainwork/$OUTNAME,TEST_PATH=/workspace/axolotl/mainwork/dataset/test_segments.jsonl,OUT_PATH=/run_out/inference/test_$tag.jsonl,TEMPERATURE=$t" \
             /opt/c2s/run_test.py > "$RUN/inference/test_$tag.log" 2>&1 &
+        PID=$!; wait $PID
+    done
+    for n in $AZI_SETS; do
+        run_infer "MODEL_DIR=/workspace/axolotl/mainwork/$OUTNAME,TEMPERATURE=$AZI_TEMP" \
+            /opt/c2s/run_azi.py "/workspace/axolotl/mainwork/inference/$n.jsonl" "/run_out/inference/${n}_results.jsonl" \
+            > "$RUN/inference/$n.log" 2>&1 &
         PID=$!; wait $PID
     done
     INFER_STATUS=completed
