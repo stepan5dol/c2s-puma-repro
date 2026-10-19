@@ -26,7 +26,7 @@ def _tg(method, **kwargs):
         r = requests.post(url, timeout=30, **kwargs)
         return r.json()
     except Exception as e:
-        print(f"[tg] {method} failed: {e}", flush=True)
+        print(f"[tg] {method} failed: {str(e).replace(BOT_TOKEN, '***')}", flush=True)
         return {}
 
 def send_text(text: str):

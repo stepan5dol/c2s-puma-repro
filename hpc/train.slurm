@@ -72,8 +72,8 @@ TG_TOKEN=$(sed -n 's/^TG_TOKEN=//p' "$ENV_FILE")
 TG_CHAT=$(sed -n 's/^TG_CHAT=//p' "$ENV_FILE")
 tg() {
     [ -n "$TG_TOKEN" ] && [ -n "$TG_CHAT" ] || return 0
-    curl -fsS -m 30 "https://api.telegram.org/bot$TG_TOKEN/sendMessage" \
-        --data-urlencode "chat_id=$TG_CHAT" --data-urlencode "text=$1" > /dev/null || true
+    printf 'url = "https://api.telegram.org/bot%s/sendMessage"\n' "$TG_TOKEN" | curl -fsS -m 30 -K - \
+        --data-urlencode "chat_id=$TG_CHAT" --data-urlencode "text=$1" > /dev/null 2>&1 || true
 }
 cp "$BASE/tg_monitor.py" "$WORK/tg_monitor.py" 2>/dev/null || : > "$WORK/tg_monitor.py"
 
