@@ -5,6 +5,7 @@ on:
 
 env:
   SNAPSHOT: https://huggingface.co/dolzhenkosv/c2s-pythia-1b-azithro-transfer/resolve/040f129aafc483852e54a7ccf078f7cc1a2286f5/env_snapshot
+  INFER_SNAPSHOT: https://huggingface.co/dolzhenkosv/c2s-pythia-1b-azithro-transfer/resolve/d472896689ce1140de6bd6fedfa905f980af17e3/inference_ckpt264_2026-10-05/env_snapshot
   SIF_REPO: dolzhenkosv/c2s-puma-sif
   SIF_NAME: c2s-train.sif
 
@@ -27,7 +28,8 @@ jobs:
         run: |
           mkdir -p build
           curl -fsSL "$SNAPSHOT/pip_freeze.txt" -o build/pip_freeze_pod.txt
-          sha256sum build/pip_freeze_pod.txt
+          curl -fsSL "$INFER_SNAPSHOT/pip_freeze.txt" -o build/pip_freeze_infer_pod.txt
+          sha256sum build/pip_freeze_pod.txt build/pip_freeze_infer_pod.txt
 
       - name: Build
         run: |
@@ -45,6 +47,9 @@ jobs:
           grep -q '^axolotl: 1855055ed15ab1888614f0a1958bbdc7a722ef3b$' build/build_info.txt
           grep -q 'Python 3.12.13' build/build_info.txt
           python3 scripts/compare_freeze.py build/pip_freeze_pod.txt build/pip_freeze_image.txt | tee build/freeze_diff.txt
+          apptainer exec /mnt/work/$SIF_NAME cat /opt/c2s/pip_freeze_infer_image.txt > build/pip_freeze_infer_image.txt
+          python3 scripts/compare_freeze.py build/pip_freeze_infer_pod.txt build/pip_freeze_infer_image.txt | tee build/freeze_diff_infer.txt
+          test "$(apptainer run --app infer /mnt/work/$SIF_NAME -c 'import sys; print(sys.prefix)')" = /opt/infer
           (cd /mnt/work && sha256sum $SIF_NAME) | tee build/$SIF_NAME.sha256
 
       - name: Keep build report
@@ -54,7 +59,7 @@ jobs:
           name: build-report
           path: build/
 
-      - name: Upload image to public HF repo
+      - name: Upload image to HF
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |

@@ -5,6 +5,10 @@ from urllib.parse import unquote
 ALLOWED = {
     "flash-attn": ("2.8.3", "2.8.3+cu130torch2.13"),
     "mamba-ssm": ("2.3.2.post1", None),
+    "deep-ep": ("2.0.0+local", None),
+    "python-apt": ("2.7.7+ubuntu5.3", None),
+    "dbus-python": ("1.3.2", None),
+    "pygobject": ("3.48.2", None),
 }
 
 

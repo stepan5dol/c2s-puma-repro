@@ -33,3 +33,16 @@ jobs:
           test ! -e $o/model.safetensors
           rm $o/checkpoint-*/trainer_state.json
           ! python3 scripts/finalize_best.py $o
+      - name: build_gemma_segments.py on fake rows
+        run: |
+          set -eux
+          s=/tmp/seg_src d=/tmp/seg_dst
+          mkdir -p $s
+          for f in train valid test; do
+            printf '%s\n' '{"segments": [{"label": false, "text": "Perturbed cell:"}, {"label": true, "text": " A B<|endoftext|>"}]}' > $s/${f}_segments.jsonl
+          done
+          python3 scripts/build_gemma_segments.py $s $d
+          printf '%s\n' '{"segments": [{"label": false, "text": "<bos>Perturbed cell:"}, {"label": true, "text": " A B<eos>"}]}' > /tmp/want.jsonl
+          for f in train valid test; do cmp $d/${f}_segments.jsonl /tmp/want.jsonl; done
+          printf '%s\n' '{"segments": [{"label": false, "text": "x"}, {"label": true, "text": " A<eos>"}]}' > $s/train_segments.jsonl
+          ! python3 scripts/build_gemma_segments.py $s $d

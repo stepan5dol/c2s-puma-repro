@@ -1,0 +1,65 @@
+base_model: vandijklab/C2S-Scale-Gemma-2-2B
+model_type: AutoModelForCausalLM
+tokenizer_type: AutoTokenizer
+trust_remote_code: false
+
+adapter:
+load_in_8bit: false
+load_in_4bit: false
+strict: false
+
+plugins:
+  - axolotl.integrations.cut_cross_entropy.CutCrossEntropyPlugin
+cut_cross_entropy: true
+cut_cross_entropy_accum_c_fp32: true
+cut_cross_entropy_c_grad_chunk_size: auto
+
+datasets:
+  - path: /workspace/axolotl/mainwork/dataset/train_segments.jsonl
+    type: input_output
+    ds_type: json
+
+test_datasets:
+  - path: /workspace/axolotl/mainwork/dataset/valid_segments.jsonl
+    type: input_output
+    ds_type: json
+    split: train
+
+val_set_size: 0
+output_dir: /workspace/axolotl/mainwork/sft_gemma2_2b_short_full
+
+sequence_len: 8192
+sample_packing: true
+pad_to_sequence_len: true
+eval_sample_packing: false
+
+flash_attention: true
+
+gradient_checkpointing: true
+bf16: true
+tf32: true
+
+micro_batch_size: 4
+gradient_accumulation_steps: 16
+num_epochs: 6
+
+optimizer: adamw_bnb_8bit
+lr_scheduler: cosine
+learning_rate: 1e-4
+warmup_ratio: 0.1
+max_grad_norm: 1.0
+weight_decay: 0.0
+
+logging_steps: 1
+eval_steps: 33
+save_steps: 33
+save_total_limit: 5
+load_best_model_at_end: true
+metric_for_best_model: eval_loss
+greater_is_better: false
+early_stopping_patience: 4
+
+seed: 42
+
+wandb_project:
+use_tensorboard: true

@@ -4,6 +4,9 @@ From: nvidia/cuda@sha256:1470d2d7904fac4e5cb3bdfd4993305c46d3ee76deb0213eaaf248e
 %files
     build/pip_freeze_pod.txt /opt/c2s/pip_freeze_pod.txt
     scripts/finalize_best.py /opt/c2s/finalize_best.py
+    build/pip_freeze_infer_pod.txt /opt/c2s/pip_freeze_infer_pod.txt
+    scripts/run_test.py /opt/c2s/run_test.py
+    scripts/run_azi.py /opt/c2s/run_azi.py
 
 %post
     set -eux
@@ -43,6 +46,15 @@ From: nvidia/cuda@sha256:1470d2d7904fac4e5cb3bdfd4993305c46d3ee76deb0213eaaf248e
     python -m py_compile /opt/c2s/finalize_best.py
 
     uv pip freeze > /opt/c2s/pip_freeze_image.txt
+
+    grep -v -E '^(deep_ep @|python-apt==|dbus-python==|PyGObject==|vllm @)' pip_freeze_infer_pod.txt > req_infer.txt
+    echo "vllm==$(sed -n 's|^vllm @ .*/vllm-\([^-]*\)-.*|\1|p' pip_freeze_infer_pod.txt)" >> req_infer.txt
+    uv venv --python 3.12.13 /opt/infer
+    uv pip install --python /opt/infer/bin/python --no-deps $IDX \
+        --extra-index-url https://flashinfer.ai/whl/cu130 -r req_infer.txt
+    /opt/infer/bin/python -c "import vllm; from vllm.inputs import TokensPrompt; print('vllm', vllm.__version__)"
+    /opt/infer/bin/python -m py_compile /opt/c2s/run_test.py /opt/c2s/run_azi.py
+    uv pip freeze --python /opt/infer/bin/python > /opt/c2s/pip_freeze_infer_image.txt
     {
         echo "repo_commit: {{ GIT_SHA }}"
         echo "base: nvidia/cuda:13.0.0-devel-ubuntu22.04@sha256:1470d2d7904fac4e5cb3bdfd4993305c46d3ee76deb0213eaaf248e5cf9c7400"
@@ -50,10 +62,20 @@ From: nvidia/cuda@sha256:1470d2d7904fac4e5cb3bdfd4993305c46d3ee76deb0213eaaf248e
         echo "nvcc: $(nvcc --version | tail -1)"
         echo "axolotl: $(git -C /workspace/axolotl rev-parse HEAD)"
         echo "finalize_best: $(sha256sum /opt/c2s/finalize_best.py | cut -d' ' -f1)"
+        echo "infer python: $(/opt/infer/bin/python -VV)"
+        echo "run_test: $(sha256sum /opt/c2s/run_test.py | cut -d' ' -f1)"
+        echo "run_azi: $(sha256sum /opt/c2s/run_azi.py | cut -d' ' -f1)"
         echo "built: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
     } > /opt/c2s/build_info.txt
-    rm -f req_main.txt req_build.txt
+    rm -f req_main.txt req_build.txt req_infer.txt
 
 %environment
     export VIRTUAL_ENV=/opt/venv
     export PATH=/opt/venv/bin:$PATH
+
+%appenv infer
+    export VIRTUAL_ENV=/opt/infer
+    export PATH=/opt/infer/bin:$PATH
+
+%apprun infer
+    exec python "$@"
