@@ -38,8 +38,8 @@ source repo's list before training.
 
 ```
 sbatch train.slurm                                                       # Pythia 1b
-sbatch --time=3-00:00:00 --export=ALL,MODEL=gemma2b train.slurm          # Gemma 2 2B
-sbatch --time=3-00:00:00 --export=ALL,MODEL=gemma2b,INFER=1 train.slurm  # + inference on test
+sbatch --time=2-12:00:00 --export=ALL,MODEL=gemma2b train.slurm          # Gemma 2 2B
+sbatch --time=2-12:00:00 --export=ALL,MODEL=gemma2b,INFER=1 train.slurm  # + inference
 ```
 
 `INFER=1` runs, with the best checkpoint, `run_test.py` on `test_segments.jsonl` at temperatures
