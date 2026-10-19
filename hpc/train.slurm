@@ -31,6 +31,8 @@ mkdir -p "$WORK"/{mainwork/dataset,last_run_prepared,hf,triton}
 ENV_FILE=$BASE/c2s.env
 grep -q '^HF_TOKEN=hf_' "$ENV_FILE" || { echo "no HF_TOKEN in $ENV_FILE" >&2; exit 1; }
 chmod 600 "$ENV_FILE"
+HF_AUTH=$WORK/hf_auth_header
+(umask 077 && sed -n 's/^HF_TOKEN=/Authorization: Bearer /p' "$ENV_FILE" > "$HF_AUTH")
 STATUS=failed
 UPID=
 TGPID=
@@ -53,7 +55,7 @@ repo, prefix = "dolzhenkosv/c2s-puma-runs", f"runs/{run_name}"
 out, run_dir = "/workspace/axolotl/mainwork/sft_pythia1b_short_full", "/run_out"
 done_file = f"{run_dir}/hf_uploaded.txt"
 api = HfApi()
-api.create_repo(repo, private=False, exist_ok=True)
+api.create_repo(repo, private=True, exist_ok=True)
 
 done = set(open(done_file).read().split()) if os.path.exists(done_file) else set()
 local = sorted((d for d in os.listdir(out) if re.fullmatch(r"checkpoint-\d+", d))
@@ -151,9 +153,9 @@ trap finish EXIT
 PID=
 trap 'STATUS=timeout; [ -n "$PID" ] && kill "$PID" 2>/dev/null; exit 143' TERM
 
-curl -fsSL "$SIF_URL/c2s-train.sif.sha256" -o "$RUN/image.sha256"
+curl -fsSL -H @"$HF_AUTH" "$SIF_URL/c2s-train.sif.sha256" -o "$RUN/image.sha256"
 if ! (cd "$BASE/images" && sha256sum -c --quiet "$RUN/image.sha256" 2>/dev/null); then
-    curl -fL "$SIF_URL/c2s-train.sif" -o "$SIF.part"
+    curl -fL -H @"$HF_AUTH" "$SIF_URL/c2s-train.sif" -o "$SIF.part"
     mv "$SIF.part" "$SIF"
     (cd "$BASE/images" && sha256sum -c "$RUN/image.sha256")
 fi

@@ -15,12 +15,12 @@ original ones, verified by sha256 against `env_snapshot/inputs_sha256.txt`.
   `lm_head.weight` / unexpected `embed_out.weight`), so the final model kept the output layer
   from the last step. Training itself is unchanged.
 - `.github/workflows/build-sif.yml`: builds the image (manual run), compares its freeze with
-  the pod's and uploads it to the public HF repo `dolzhenkosv/c2s-puma-sif`.
+  the pod's and uploads it to the private HF repo `dolzhenkosv/c2s-puma-sif`.
 - `hpc/train.slurm`: the run on Puma. Needs `~/c2s/c2s.env` with `HF_TOKEN=<write token>`
-  (checkpoint uploads only); optional `TG_TOKEN` and `TG_CHAT` there plus `~/c2s/tg_monitor.py`
+  (image download and checkpoint uploads); optional `TG_TOKEN` and `TG_CHAT` there plus `~/c2s/tg_monitor.py`
   for Telegram updates. Output goes to `~/c2s/results/<stamp>_puma-a100mig-repro/`;
-  checkpoints are mirrored to the public HF repo `dolzhenkosv/c2s-puma-runs` during training.
+  checkpoints are mirrored to the private HF repo `dolzhenkosv/c2s-puma-runs` during training.
 
 The run of 2026-10-17 (`runs/2026-10-17_0244_puma-a100mig-repro`) predates the fix: its
 `result/sft_pythia1b_short_full/model.safetensors` is checkpoint-264 with `embed_out.weight`
-from step 396. Use `checkpoint-264/`.
+from step 396. Use `checkpoint-264/`, the only checkpoint kept.
