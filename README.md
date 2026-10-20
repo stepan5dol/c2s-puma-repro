@@ -31,7 +31,9 @@ source repo's list before training.
   with the pods' freezes and uploads it to the private HF repo `dolzhenkosv/c2s-puma-sif`.
 - `hpc/train.slurm`: the run on Puma. Needs `~/c2s/c2s.env` with `HF_TOKEN=<write token>`;
   optional `TG_TOKEN` and `TG_CHAT` there plus `~/c2s/tg_monitor.py` for Telegram updates.
-  Output goes to `~/c2s/results/<stamp>_<slug>/`. `diag/` there has the job's CPUs, memory
+  The image, run dirs and Slurm logs are on xdisk: `/xdisk/vkalin/dolzhenko/c2s/images/`,
+  `results/<stamp>_<slug>/` and `logs/` (create `logs/` before the first `sbatch`, Slurm
+  does not). `diag/` in the run dir has the job's CPUs, memory
   limit and `/tmp` at start (`start.txt`), each step with its start time (`steps.log`), job
   memory, peak, `oom_kill` count, process count and free `/tmp` every 5 s (`resources.tsv`),
   and the exit code and failed step (`end.txt`, also in `record.md` and the Telegram message).
@@ -41,10 +43,14 @@ source repo's list before training.
   the micro batch and twice the gradient accumulation (same effective batch).
 
 ```
-sbatch train.slurm                                                       # Pythia 1b
-sbatch --time=2-12:00:00 --export=ALL,MODEL=gemma2b train.slurm          # Gemma 2 2B
-sbatch --time=2-12:00:00 --export=ALL,MODEL=gemma2b,INFER=1 train.slurm  # + inference
+sbatch train.slurm                                                                          # Pythia 1b
+sbatch --time=2-12:00:00 --cpus-per-task=16 --export=ALL,MODEL=gemma2b train.slurm          # Gemma 2 2B
+sbatch --time=2-12:00:00 --cpus-per-task=16 --export=ALL,MODEL=gemma2b,INFER=1 train.slurm  # + inference
 ```
+
+Gemma gets 16 CPUs for their 80 GB (5 GB per CPU on Puma). With 8 CPUs (40 GB) its preprocess
+failed while saving the dataset (job 24306206, "One of the subprocesses has abruptly died", no
+oom_kill); the same failure appears when preprocess memory reaches a cgroup limit.
 
 `INFER=1` runs, with the best checkpoint, `run_test.py` on `test_segments.jsonl` at temperatures
 `INFER_TEMPS` (default `1.0 0.8 1.2`) and `run_azi.py` on the three azithromycin prompt sets

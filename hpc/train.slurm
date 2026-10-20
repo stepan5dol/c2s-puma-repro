@@ -8,7 +8,7 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --time=1-00:00:00
 #SBATCH --mail-type=END,FAIL
-#SBATCH --output=%x_%j.out
+#SBATCH --output=/xdisk/vkalin/dolzhenko/c2s/logs/%x_%j.out
 #SBATCH --signal=B:TERM@900
 
 set -euo pipefail
@@ -46,16 +46,17 @@ esac
 
 STAMP=$(date +%Y-%m-%d_%H%M)
 BASE=$HOME/c2s
-RUN=$BASE/results/${STAMP}_${SLUG}
+DATA=/xdisk/vkalin/dolzhenko/c2s
+RUN=$DATA/results/${STAMP}_${SLUG}
 SRC=https://huggingface.co/$HF_SRC/resolve/$REV
 SIF_URL=https://huggingface.co/dolzhenkosv/c2s-puma-sif/resolve/main
-SIF=$BASE/images/c2s-train.sif
+SIF=$DATA/images/c2s-train.sif
 WORK=/tmp/c2s_$SLURM_JOB_ID
 T0=$(date +%s)
 
 if [ -e "$RUN" ]; then echo "run dir exists: $RUN" >&2; exit 1; fi
-mkdir -p "$RUN" "$BASE/images"
-ln -sfn "$RUN" "$BASE/results/последний"
+mkdir -p "$RUN" "$DATA/images"
+ln -sfn "$RUN" "$DATA/results/последний"
 mkdir -p "$WORK"/{mainwork/dataset,last_run_prepared,hf,triton}
 ENV_FILE=$BASE/c2s.env
 grep -q '^HF_TOKEN=hf_' "$ENV_FILE" || { echo "no HF_TOKEN in $ENV_FILE" >&2; exit 1; }
@@ -227,7 +228,7 @@ finish() {
         echo "final_model_sha256: $(cat "$RUN/$OUTNAME"/model*.safetensors 2>/dev/null | sha256sum | cut -d' ' -f1)"
         echo "inference: $INFER_STATUS (test at $INFER_TEMPS, azithromycin at $AZI_TEMP)"
         echo "tg_monitor_sha256: $(sha256sum "$WORK/tg_monitor.py" 2>/dev/null | cut -d' ' -f1)"
-        echo "slurm_log: $SLURM_SUBMIT_DIR/c2s-sft_$SLURM_JOB_ID.out"
+        echo "slurm_log: $DATA/logs/c2s-sft_$SLURM_JOB_ID.out"
         echo
         echo '## image build_info'
         cat "$RUN/build_info.txt" 2>/dev/null
@@ -247,7 +248,7 @@ finish() {
         MSG+=$'\n'"step $STEP, exit $RC, memory peak $(gib "$MEM_PEAK") GiB, oom_kill $(oom_kills)"
         LOG=$RUN/train.log
         [ -s "$LOG" ] || LOG=$RUN/preprocess.log
-        [ -s "$LOG" ] || LOG=$SLURM_SUBMIT_DIR/c2s-sft_$SLURM_JOB_ID.out
+        [ -s "$LOG" ] || LOG=$DATA/logs/c2s-sft_$SLURM_JOB_ID.out
         MSG+=$'\n\n'"$(tail -c 3000 "$LOG" 2>/dev/null | tr '\r' '\n' | grep -v '^[[:space:]]*$' | tail -n 15)"
     fi
     tg "$MSG"
@@ -259,10 +260,10 @@ trap '[ "$STATUS" = completed ] || STATUS=timeout; [ -n "$PID" ] && kill "$PID" 
 
 step download_image
 curl -fsSL -H @"$HF_AUTH" "$SIF_URL/c2s-train.sif.sha256" -o "$RUN/image.sha256"
-if ! (cd "$BASE/images" && sha256sum -c --quiet "$RUN/image.sha256" 2>/dev/null); then
+if ! (cd "$DATA/images" && sha256sum -c --quiet "$RUN/image.sha256" 2>/dev/null); then
     curl -fL -H @"$HF_AUTH" "$SIF_URL/c2s-train.sif" -o "$SIF.part"
     mv "$SIF.part" "$SIF"
-    (cd "$BASE/images" && sha256sum -c "$RUN/image.sha256")
+    (cd "$DATA/images" && sha256sum -c "$RUN/image.sha256")
 fi
 
 step download_inputs
