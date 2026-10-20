@@ -67,6 +67,53 @@ INFER_STATUS=off
 MB=
 UPID=
 TGPID=
+MONPID=
+STEP=setup
+RC=0
+DIAG=$RUN/diag
+mkdir -p "$DIAG"
+CG=/sys/fs/cgroup$(sed -n 's/^0:://p' /proc/self/cgroup)
+MEM_CUR=$CG/memory.current
+MEM_PEAK=$CG/memory.peak
+MEM_EV=$CG/memory.events
+if [ ! -r "$MEM_CUR" ]; then
+    CG=/sys/fs/cgroup/memory$(sed -n 's/^[0-9]*:memory://p' /proc/self/cgroup)
+    MEM_CUR=$CG/memory.usage_in_bytes
+    MEM_PEAK=$CG/memory.max_usage_in_bytes
+    MEM_EV=$CG/memory.oom_control
+fi
+oom_kills() { awk '$1 == "oom_kill" {print $2}' "$MEM_EV" 2>/dev/null; }
+gib() { awk -v b="$(cat "$1" 2>/dev/null)" 'BEGIN {if (b ~ /^[0-9]+$/) printf "%.2f", b / 2^30}'; }
+step() {
+    STEP=$1
+    echo "$STEP" > "$DIAG/step"
+    echo "$(date '+%F %T') $STEP" | tee -a "$DIAG/steps.log"
+}
+monitor() {
+    printf 'time\tmem_gib\tpeak_gib\toom_kill\tprocs\ttmp_free_gib\tstep\n'
+    while :; do
+        printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$(date +%T)" "$(gib "$MEM_CUR")" "$(gib "$MEM_PEAK")" \
+            "$(oom_kills)" "$(wc -l < "$CG/cgroup.procs" 2>/dev/null)" \
+            "$(df -Pk /tmp | awk 'NR == 2 {printf "%.1f", $4 / 2^20}')" "$(cat "$DIAG/step" 2>/dev/null)"
+        sleep 5
+    done
+}
+{
+    echo "start: $(date '+%F %T %Z')"
+    echo "node: $(hostname)"
+    echo "slurm: job=$SLURM_JOB_ID cpus_per_task=${SLURM_CPUS_PER_TASK:-} mem_per_cpu=${SLURM_MEM_PER_CPU:-} mem_per_node=${SLURM_MEM_PER_NODE:-}"
+    echo "nproc: $(nproc) online_cpus: $(getconf _NPROCESSORS_ONLN)"
+    echo "cgroup: $CG"
+    for d in "$CG" "${CG%/*}" "${CG%/*/*}"; do
+        for f in memory.max memory.limit_in_bytes; do
+            if [ -r "$d/$f" ]; then echo "$d/$f: $(cat "$d/$f")"; fi
+        done
+    done
+    df -h /tmp "$HOME"
+    ulimit -a
+} > "$DIAG/start.txt" 2>&1
+monitor > "$DIAG/resources.tsv" 2>&1 &
+MONPID=$!
 
 TG_TOKEN=$(sed -n 's/^TG_TOKEN=//p' "$ENV_FILE")
 TG_CHAT=$(sed -n 's/^TG_CHAT=//p' "$ENV_FILE")
@@ -121,7 +168,9 @@ uploader() {
 }
 
 finish() {
+    RC=$?
     set +e
+    echo "$(date '+%F %T') exit $RC in step $STEP, stopping background jobs" | tee -a "$DIAG/steps.log"
     if [ -n "$UPID" ]; then
         pkill -P "$UPID" 2>/dev/null; kill "$UPID" 2>/dev/null; wait "$UPID" 2>/dev/null
     fi
@@ -147,10 +196,25 @@ finish() {
             rsync -a "${EXCL[@]}" "$OUT/$BEST" "$RUN/$OUTNAME/"
         fi
     fi
+    if [ -n "$MONPID" ]; then
+        kill "$MONPID" 2>/dev/null; wait "$MONPID" 2>/dev/null
+    fi
+    {
+        echo "end: $(date '+%F %T %Z')"
+        echo "exit_code: $RC"
+        echo "step: $STEP"
+        echo "memory_peak_gib: $(gib "$MEM_PEAK")"
+        cat "$MEM_EV"
+        df -h /tmp "$HOME"
+    } > "$DIAG/end.txt" 2>&1
     {
         echo "# ${STAMP}_${SLUG}"
         echo
         echo "status: $STATUS"
+        echo "exit_code: $RC$([ "$RC" -gt 128 ] && echo " (signal $((RC - 128)))")"
+        echo "last_step: $STEP"
+        echo "memory_peak_gib: $(gib "$MEM_PEAK")"
+        echo "oom_kill: $(oom_kills)"
         echo "model: $MODEL"
         echo "slurm_job: $SLURM_JOB_ID on $(hostname)"
         echo "duration_s: $(( $(date +%s) - T0 ))"
@@ -180,6 +244,7 @@ finish() {
     [ -n "$BEST" ] && MSG+=$'\n'"best: $BEST"
     [ "$INFER_STATUS" != off ] && MSG+=$'\n'"inference: $INFER_STATUS"
     if [ "$STATUS" != completed ]; then
+        MSG+=$'\n'"step $STEP, exit $RC, memory peak $(gib "$MEM_PEAK") GiB, oom_kill $(oom_kills)"
         LOG=$RUN/train.log
         [ -s "$LOG" ] || LOG=$RUN/preprocess.log
         [ -s "$LOG" ] || LOG=$SLURM_SUBMIT_DIR/c2s-sft_$SLURM_JOB_ID.out
@@ -192,6 +257,7 @@ trap finish EXIT
 PID=
 trap '[ "$STATUS" = completed ] || STATUS=timeout; [ -n "$PID" ] && kill "$PID" 2>/dev/null; exit 143' TERM
 
+step download_image
 curl -fsSL -H @"$HF_AUTH" "$SIF_URL/c2s-train.sif.sha256" -o "$RUN/image.sha256"
 if ! (cd "$BASE/images" && sha256sum -c --quiet "$RUN/image.sha256" 2>/dev/null); then
     curl -fL -H @"$HF_AUTH" "$SIF_URL/c2s-train.sif" -o "$SIF.part"
@@ -199,6 +265,7 @@ if ! (cd "$BASE/images" && sha256sum -c --quiet "$RUN/image.sha256" 2>/dev/null)
     (cd "$BASE/images" && sha256sum -c "$RUN/image.sha256")
 fi
 
+step download_inputs
 FILES="$CFG dataset/train_segments.jsonl dataset/valid_segments.jsonl"
 [ "$INFER" = 1 ] && FILES+=" dataset/test_segments.jsonl"
 curl -fsSL -H @"$HF_AUTH" "$SRC/$INPUTS" -o "$RUN/inputs_sha256_source.txt"
@@ -225,7 +292,7 @@ run() {
         --bind "$WORK/mainwork:/workspace/axolotl/mainwork" \
         --bind "$WORK/last_run_prepared:/workspace/axolotl/last_run_prepared" \
         --bind "$WORK/hf:/hf" --bind "$WORK/triton:/triton" \
-        --env HF_HOME=/hf,TRITON_CACHE_DIR=/triton,HOME=/tmp \
+        --env HF_HOME=/hf,TRITON_CACHE_DIR=/triton,HOME=/tmp,PYTHONFAULTHANDLER=1 \
         --pwd /workspace/axolotl "$SIF" "$@"
 }
 
@@ -242,10 +309,11 @@ run_infer() {
     apptainer run --app infer --nv --cleanenv --no-home --writable-tmpfs \
         --bind "$WORK/mainwork:/workspace/axolotl/mainwork" \
         --bind "$WORK/hf:/hf" --bind "$WORK/triton:/triton" --bind "$RUN:/run_out" \
-        --env HF_HOME=/hf,TRITON_CACHE_DIR=/triton,VLLM_CACHE_ROOT=/triton/vllm,HOME=/tmp,"$1" \
+        --env HF_HOME=/hf,TRITON_CACHE_DIR=/triton,VLLM_CACHE_ROOT=/triton/vllm,HOME=/tmp,PYTHONFAULTHANDLER=1,"$1" \
         "$SIF" "${@:2}"
 }
 
+step container_checks
 run cat /opt/c2s/build_info.txt > "$RUN/build_info.txt"
 run test -f /opt/c2s/finalize_best.py
 [ "$INFER" = 1 ] && run_infer TEMPERATURE=1 -c 'import vllm'
@@ -254,6 +322,7 @@ run python -c "import torch; assert torch.cuda.is_available(); print(torch.__ver
 tg "▶️ ${STAMP}_${SLUG}: job $SLURM_JOB_ID on $(hostname)
 $(cat "$RUN/torch_check.txt")"
 
+step preprocess
 run axolotl preprocess "mainwork/$CFG" > "$RUN/preprocess.log" 2>&1 &
 PID=$!; wait $PID
 uploader &
@@ -267,6 +336,7 @@ fi
 MB=$(sed -n 's/^micro_batch_size: *\([0-9]*\).*/\1/p' "$WORK/mainwork/$CFG")
 EFFECTIVE=$(( MB * $(sed -n 's/^gradient_accumulation_steps: *\([0-9]*\).*/\1/p' "$WORK/mainwork/$CFG") ))
 while :; do
+    step "train_micro$MB"
     run axolotl train "mainwork/$CFG" > "$RUN/train.log" 2>&1 &
     PID=$!
     if wait $PID; then
@@ -289,15 +359,18 @@ done
 
 if [ "$INFER" = 1 ]; then
     INFER_STATUS=failed
+    step finalize_best
     run python /opt/c2s/finalize_best.py "mainwork/$OUTNAME" > /dev/null 2>> "$RUN/finalize_best.log"
     mkdir -p "$RUN/inference"
     for t in $INFER_TEMPS; do
         tag=t$(echo "$t" | tr -d .)
+        step "infer_test_$tag"
         run_infer "MODEL_DIR=/workspace/axolotl/mainwork/$OUTNAME,TEST_PATH=/workspace/axolotl/mainwork/dataset/test_segments.jsonl,OUT_PATH=/run_out/inference/test_$tag.jsonl,TEMPERATURE=$t" \
             /opt/c2s/run_test.py > "$RUN/inference/test_$tag.log" 2>&1 &
         PID=$!; wait $PID
     done
     for n in $AZI_SETS; do
+        step "infer_$n"
         run_infer "MODEL_DIR=/workspace/axolotl/mainwork/$OUTNAME,TEMPERATURE=$AZI_TEMP" \
             /opt/c2s/run_azi.py "/workspace/axolotl/mainwork/inference/$n.jsonl" "/run_out/inference/${n}_results.jsonl" \
             > "$RUN/inference/$n.log" 2>&1 &

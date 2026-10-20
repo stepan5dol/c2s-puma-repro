@@ -31,7 +31,11 @@ source repo's list before training.
   with the pods' freezes and uploads it to the private HF repo `dolzhenkosv/c2s-puma-sif`.
 - `hpc/train.slurm`: the run on Puma. Needs `~/c2s/c2s.env` with `HF_TOKEN=<write token>`;
   optional `TG_TOKEN` and `TG_CHAT` there plus `~/c2s/tg_monitor.py` for Telegram updates.
-  Output goes to `~/c2s/results/<stamp>_<slug>/`; checkpoints without `optimizer.pt` are
+  Output goes to `~/c2s/results/<stamp>_<slug>/`. `diag/` there has the job's CPUs, memory
+  limit and `/tmp` at start (`start.txt`), each step with its start time (`steps.log`), job
+  memory, peak, `oom_kill` count, process count and free `/tmp` every 5 s (`resources.tsv`),
+  and the exit code and failed step (`end.txt`, also in `record.md` and the Telegram message).
+  Checkpoints without `optimizer.pt` are
   mirrored to the private HF repo `dolzhenkosv/c2s-puma-runs` during training. If training
   runs out of GPU memory before the first checkpoint, it is restarted in the same job with half
   the micro batch and twice the gradient accumulation (same effective batch).
