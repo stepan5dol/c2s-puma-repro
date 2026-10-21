@@ -43,6 +43,11 @@ case $MODEL in
         exit 1
         ;;
 esac
+EPOCHS=${EPOCHS:-}
+if [ -n "$EPOCHS" ]; then
+    [[ $EPOCHS =~ ^[0-9]+$ ]] || { echo "EPOCHS must be an integer" >&2; exit 1; }
+    SLUG+=-ep$EPOCHS
+fi
 
 STAMP=$(date +%Y-%m-%d_%H%M)
 BASE=$HOME/c2s
@@ -242,6 +247,7 @@ finish() {
         echo "source: $HF_SRC@$REV"
         echo "image_sha256: $(cut -d' ' -f1 "$RUN/image.sha256" 2>/dev/null)"
         echo "config_sha256: $(grep " $CFG\$" "$RUN/inputs_sha256.txt" 2>/dev/null | cut -d' ' -f1)"
+        echo "num_epochs: $(sed -n 's/^num_epochs: *\([0-9]*\).*/\1/p' "$WORK/mainwork/$CFG" 2>/dev/null)"
         echo "micro_batch_size: ${MB}"
         echo "base_model_revision: ${BASE_REV:-}"
         echo "best_checkpoint: ${BEST}"
@@ -305,6 +311,11 @@ if [ "$INFER" = 1 ]; then
 fi
 (cd "$WORK/mainwork" && sha256sum -c "$RUN/inputs_sha256.txt")
 cp "$WORK/mainwork/$CFG" "$RUN/"
+if [ -n "$EPOCHS" ]; then
+    sed -i "s/^num_epochs: .*/num_epochs: $EPOCHS/" "$WORK/mainwork/$CFG"
+    [ "$(grep -c "^num_epochs: $EPOCHS\$" "$WORK/mainwork/$CFG")" -eq 1 ]
+    cp "$WORK/mainwork/$CFG" "$RUN/${CFG%.yaml}_ep$EPOCHS.yaml"
+fi
 
 nvidia-smi > "$RUN/nvidia-smi.txt"
 
