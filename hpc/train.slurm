@@ -69,7 +69,9 @@ MB=
 UPID=
 TGPID=
 MONPID=
+INFPID=
 STEP=setup
+STEP_T0=$(date +%s)
 RC=0
 DIAG=$RUN/diag
 mkdir -p "$DIAG"
@@ -86,9 +88,24 @@ fi
 oom_kills() { awk '$1 == "oom_kill" {print $2}' "$MEM_EV" 2>/dev/null; }
 gib() { awk -v b="$(cat "$1" 2>/dev/null)" 'BEGIN {if (b ~ /^[0-9]+$/) printf "%.2f", b / 2^30}'; }
 step() {
+    local now=$(date +%s)
+    local took=$(( (now - STEP_T0) / 60 ))
+    echo "$(date '+%F %T') $1 (after $STEP, $took min)" | tee -a "$DIAG/steps.log"
+    case $1 in
+        train_*|finalize_best|infer_*) tg "⏩ ${STAMP}_${SLUG}: $1 (after $STEP, $took min)" ;;
+    esac
     STEP=$1
+    STEP_T0=$now
     echo "$STEP" > "$DIAG/step"
-    echo "$(date '+%F %T') $STEP" | tee -a "$DIAG/steps.log"
+}
+infer_progress() {
+    set +e
+    while sleep 1800; do
+        local s=$(cat "$DIAG/step" 2>/dev/null)
+        local p=$(tr '\r' '\n' < "$RUN/inference/${s#infer_}.log" 2>/dev/null \
+            | grep -oE 'Processed prompts: +[0-9]+%\|[^|]*\| *[0-9]+/[0-9]+ \[[^]]*\]' | tail -1 | sed -E 's/\|[^|]*\|/ /')
+        [ -n "$p" ] && tg "⏳ ${STAMP}_${SLUG}: $s, $p"
+    done
 }
 monitor() {
     printf 'time\tmem_gib\tpeak_gib\toom_kill\tprocs\ttmp_free_gib\tstep\n'
@@ -177,6 +194,9 @@ finish() {
     fi
     if [ -n "$TGPID" ]; then
         kill "$TGPID" 2>/dev/null; wait "$TGPID" 2>/dev/null
+    fi
+    if [ -n "$INFPID" ]; then
+        kill "$INFPID" 2>/dev/null; wait "$INFPID" 2>/dev/null
     fi
     OUT=$WORK/mainwork/$OUTNAME
     BEST=
@@ -310,7 +330,7 @@ run_infer() {
     apptainer run --app infer --nv --cleanenv --no-home --writable-tmpfs \
         --bind "$WORK/mainwork:/workspace/axolotl/mainwork" \
         --bind "$WORK/hf:/hf" --bind "$WORK/triton:/triton" --bind "$RUN:/run_out" \
-        --env HF_HOME=/hf,TRITON_CACHE_DIR=/triton,VLLM_CACHE_ROOT=/triton/vllm,HOME=/tmp,PYTHONFAULTHANDLER=1,"$1" \
+        --env HF_HOME=/hf,TRITON_CACHE_DIR=/triton,VLLM_CACHE_ROOT=/triton/vllm,HOME=/tmp,PYTHONFAULTHANDLER=1,VLLM_NO_USAGE_STATS=1,"$1" \
         "$SIF" "${@:2}"
 }
 
@@ -361,8 +381,11 @@ done
 if [ "$INFER" = 1 ]; then
     INFER_STATUS=failed
     step finalize_best
-    run python /opt/c2s/finalize_best.py "mainwork/$OUTNAME" > /dev/null 2>> "$RUN/finalize_best.log"
+    INFER_BEST=$(run python /opt/c2s/finalize_best.py "mainwork/$OUTNAME" 2>> "$RUN/finalize_best.log")
+    tg "🏁 ${STAMP}_${SLUG}: training done, best $INFER_BEST, inference: test at $INFER_TEMPS, azithromycin at $AZI_TEMP"
     mkdir -p "$RUN/inference"
+    infer_progress &
+    INFPID=$!
     for t in $INFER_TEMPS; do
         tag=t$(echo "$t" | tr -d .)
         step "infer_test_$tag"
