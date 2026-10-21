@@ -46,6 +46,7 @@ source repo's list before training.
 sbatch train.slurm                                                                          # Pythia 1b
 sbatch --time=2-12:00:00 --cpus-per-task=16 --export=ALL,MODEL=gemma2b train.slurm          # Gemma 2 2B
 sbatch --time=2-12:00:00 --cpus-per-task=16 --export=ALL,MODEL=gemma2b,INFER=1 train.slurm  # + inference
+sbatch --export=ALL,EPOCHS=2,INFER=1 train.slurm                                            # Pythia, 2 epochs, + inference
 ```
 
 Gemma gets 16 CPUs for their 80 GB (5 GB per CPU on Puma). With 8 CPUs (40 GB) its preprocess
@@ -58,6 +59,5 @@ at `AZI_TEMP` (default `1.0`), as in `inference_ckpt264_2026-10-05`. The prompt 
 `dolzhenkosv/c2s-gemma2-2b-azithro-transfer/inference/`, sha256 as in that run's snapshot.
 Results go to `inference/` in the run dir.
 
-The run of 2026-10-17 (`runs/2026-10-17_0244_puma-a100mig-repro`) predates the fix: its
-`result/sft_pythia1b_short_full/model.safetensors` is checkpoint-264 with `embed_out.weight`
-from step 396. Use `checkpoint-264/`, the only checkpoint kept.
+`EPOCHS=<n>` replaces `num_epochs` in the downloaded config. The run dir keeps both the original
+config and `<config>_ep<n>.yaml`, `record.md` shows the value used, and the slug gets `-ep<n>`.
