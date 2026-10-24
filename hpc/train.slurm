@@ -54,6 +54,8 @@ case $PRECISION in
     fp32) SLUG+=-fp32; PYENV=,PYTHONPATH=/workspace/axolotl/mainwork ;;
     *) echo "PRECISION must be bf16 or fp32" >&2; exit 1 ;;
 esac
+CKPTS=${CKPTS:-hf}
+[[ $CKPTS =~ ^(hf|xdisk)$ ]] || { echo "CKPTS must be hf or xdisk" >&2; exit 1; }
 
 STAMP=$(date +%Y-%m-%d_%H%M)
 BASE=$HOME/c2s
@@ -190,9 +192,29 @@ else:
     print("uploaded result", flush=True)
 EOF
 
+copy_ckpts() {
+    # same rule as hf_sync.py: a checkpoint with trainer_state.json, not the newest one in sync mode
+    local d i n ckpts=()
+    while IFS= read -r d; do ckpts+=("$d"); done < <(printf '%s\n' "$WORK/mainwork/$OUTNAME"/checkpoint-* | sort -V)
+    n=${#ckpts[@]}
+    [ "$1" = sync ] && n=$((n - 1))
+    for ((i = 0; i < n; i++)); do
+        d=${ckpts[i]}
+        [ -e "$d/trainer_state.json" ] || continue
+        [ -e "$RUN/checkpoints/${d##*/}/trainer_state.json" ] && continue
+        mkdir -p "$RUN/checkpoints"
+        rsync -a --exclude optimizer.pt "$d" "$RUN/checkpoints/" \
+            && echo "$(date '+%F %T') copied ${d##*/}" >> "$RUN/checkpoints.log"
+    done
+}
+
 uploader() {
     while sleep 300; do
-        run_hf python /hf_sync.py sync "${STAMP}_${SLUG}" "$OUTNAME" >> "$RUN/hf_sync.log" 2>&1 || true
+        if [ "$CKPTS" = xdisk ]; then
+            copy_ckpts sync || true
+        else
+            run_hf python /hf_sync.py sync "${STAMP}_${SLUG}" "$OUTNAME" >> "$RUN/hf_sync.log" 2>&1 || true
+        fi
     done
 }
 
@@ -227,6 +249,7 @@ finish() {
             fi
             rsync -a "${EXCL[@]}" "$OUT/$BEST" "$RUN/$OUTNAME/"
         fi
+        [ "$CKPTS" = xdisk ] && copy_ckpts final
     fi
     if [ -n "$MONPID" ]; then
         kill "$MONPID" 2>/dev/null; wait "$MONPID" 2>/dev/null
@@ -255,6 +278,7 @@ finish() {
         echo "config_sha256: $(grep " $CFG\$" "$RUN/inputs_sha256.txt" 2>/dev/null | cut -d' ' -f1)"
         echo "num_epochs: $(sed -n 's/^num_epochs: *\([0-9]*\).*/\1/p' "$WORK/mainwork/$CFG" 2>/dev/null)"
         echo "micro_batch_size: ${MB}"
+        echo "checkpoints: $CKPTS$([ "$CKPTS" = xdisk ] && echo " ($RUN/checkpoints, no HF upload)")"
         echo "precision: $PRECISION ($(grep -o -m1 '"torch_dtype": "[^"]*"' "$RUN/train.log" 2>/dev/null))"
         echo "base_model_revision: ${BASE_REV:-}"
         echo "best_checkpoint: ${BEST}"
@@ -271,8 +295,10 @@ finish() {
         echo
         echo '## author notes'
     } > "$RUN/record.md"
-    run_hf python /hf_sync.py final "${STAMP}_${SLUG}" "$OUTNAME" >> "$RUN/hf_sync.log" 2>&1 \
-        || echo "final HF upload failed, see hf_sync.log" >> "$RUN/record.md"
+    if [ "$CKPTS" = hf ]; then
+        run_hf python /hf_sync.py final "${STAMP}_${SLUG}" "$OUTNAME" >> "$RUN/hf_sync.log" 2>&1 \
+            || echo "final HF upload failed, see hf_sync.log" >> "$RUN/record.md"
+    fi
     MSG="$([ "$STATUS" = completed ] && echo '✅' || echo '❌') ${STAMP}_${SLUG}: $STATUS"
     MSG+=", $(( ($(date +%s) - T0) / 60 )) min, job $SLURM_JOB_ID"
     [ -n "$BEST" ] && MSG+=$'\n'"best: $BEST"

@@ -48,6 +48,7 @@ sbatch --time=2-12:00:00 --cpus-per-task=16 --export=ALL,MODEL=gemma2b train.slu
 sbatch --time=2-12:00:00 --cpus-per-task=16 --export=ALL,MODEL=gemma2b,INFER=1 train.slurm  # + inference
 sbatch --export=ALL,EPOCHS=2,INFER=1 train.slurm                                            # Pythia, 2 epochs, + inference
 sbatch --export=ALL,EPOCHS=2,INFER=1,PRECISION=fp32 train.slurm                             # same, weights in fp32
+sbatch --export=ALL,EPOCHS=2,INFER=1,PRECISION=fp32,CKPTS=xdisk train.slurm                 # same, checkpoints on xdisk, no HF
 ```
 
 Gemma gets 16 CPUs for their 80 GB (5 GB per CPU on Puma). With 8 CPUs (40 GB) its preprocess
@@ -69,3 +70,9 @@ are updated in bf16. The job writes the plugin `c2s_fp32.py` next to the config 
 `plugins`: it wraps `resolve_dtype` so that `torch_dtype` is float32 while `bf16` stays on. The run
 dir keeps `<config>_fp32.yaml` and `c2s_fp32.py`, `record.md` shows the `torch_dtype` from
 `train.log`, and the slug gets `-fp32`. The image is unchanged.
+
+`CKPTS=xdisk` copies every finished checkpoint, without `optimizer.pt`, to `results/<stamp>_<slug>/checkpoints/`
+on xdisk (same readiness rule as the HF mirror: `trainer_state.json` present, not the newest one;
+the rest at the end of the job) and uploads nothing to HF. With the default `CKPTS=hf`, checkpoints
+removed by `save_total_limit` are deleted from the HF repo by a new commit, which keeps their files
+in the repo history and in its storage.
