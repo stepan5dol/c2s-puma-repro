@@ -47,6 +47,7 @@ sbatch train.slurm                                                              
 sbatch --time=2-12:00:00 --cpus-per-task=16 --export=ALL,MODEL=gemma2b train.slurm          # Gemma 2 2B
 sbatch --time=2-12:00:00 --cpus-per-task=16 --export=ALL,MODEL=gemma2b,INFER=1 train.slurm  # + inference
 sbatch --export=ALL,EPOCHS=2,INFER=1 train.slurm                                            # Pythia, 2 epochs, + inference
+sbatch --export=ALL,EPOCHS=2,INFER=1,PRECISION=fp32 train.slurm                             # same, weights in fp32
 ```
 
 Gemma gets 16 CPUs for their 80 GB (5 GB per CPU on Puma). With 8 CPUs (40 GB) its preprocess
@@ -61,3 +62,10 @@ Results go to `inference/` in the run dir.
 
 `EPOCHS=<n>` replaces `num_epochs` in the downloaded config. The run dir keeps both the original
 config and `<config>_ep<n>.yaml`, `record.md` shows the value used, and the slug gets `-ep<n>`.
+
+`PRECISION=fp32` keeps the weights in fp32 and the computation in bf16 autocast. With `bf16: true`
+axolotl 1855055 loads the model in bf16 (`resolve_dtype` in `axolotl/utils/config`), so the weights
+are updated in bf16. The job writes the plugin `c2s_fp32.py` next to the config and adds it to
+`plugins`: it wraps `resolve_dtype` so that `torch_dtype` is float32 while `bf16` stays on. The run
+dir keeps `<config>_fp32.yaml` and `c2s_fp32.py`, `record.md` shows the `torch_dtype` from
+`train.log`, and the slug gets `-fp32`. The image is unchanged.
