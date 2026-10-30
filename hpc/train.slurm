@@ -48,6 +48,14 @@ if [ -n "$EPOCHS" ]; then
     [[ $EPOCHS =~ ^[0-9]+$ ]] || { echo "EPOCHS must be an integer" >&2; exit 1; }
     SLUG+=-ep$EPOCHS
 fi
+PRECISION=${PRECISION:-bf16}
+case $PRECISION in
+    bf16) PYENV= ;;
+    fp32) SLUG+=-fp32; PYENV=,PYTHONPATH=/workspace/axolotl/mainwork ;;
+    *) echo "PRECISION must be bf16 or fp32" >&2; exit 1 ;;
+esac
+CKPTS=${CKPTS:-hf}
+[[ $CKPTS =~ ^(hf|xdisk)$ ]] || { echo "CKPTS must be hf or xdisk" >&2; exit 1; }
 
 STAMP=$(date +%Y-%m-%d_%H%M)
 BASE=$HOME/c2s
@@ -184,9 +192,29 @@ else:
     print("uploaded result", flush=True)
 EOF
 
+copy_ckpts() {
+    # same rule as hf_sync.py: a checkpoint with trainer_state.json, not the newest one in sync mode
+    local d i n ckpts=()
+    while IFS= read -r d; do ckpts+=("$d"); done < <(printf '%s\n' "$WORK/mainwork/$OUTNAME"/checkpoint-* | sort -V)
+    n=${#ckpts[@]}
+    [ "$1" = sync ] && n=$((n - 1))
+    for ((i = 0; i < n; i++)); do
+        d=${ckpts[i]}
+        [ -e "$d/trainer_state.json" ] || continue
+        [ -e "$RUN/checkpoints/${d##*/}/trainer_state.json" ] && continue
+        mkdir -p "$RUN/checkpoints"
+        rsync -a --exclude optimizer.pt "$d" "$RUN/checkpoints/" \
+            && echo "$(date '+%F %T') copied ${d##*/}" >> "$RUN/checkpoints.log"
+    done
+}
+
 uploader() {
     while sleep 300; do
-        run_hf python /hf_sync.py sync "${STAMP}_${SLUG}" "$OUTNAME" >> "$RUN/hf_sync.log" 2>&1 || true
+        if [ "$CKPTS" = xdisk ]; then
+            copy_ckpts sync || true
+        else
+            run_hf python /hf_sync.py sync "${STAMP}_${SLUG}" "$OUTNAME" >> "$RUN/hf_sync.log" 2>&1 || true
+        fi
     done
 }
 
@@ -221,6 +249,7 @@ finish() {
             fi
             rsync -a "${EXCL[@]}" "$OUT/$BEST" "$RUN/$OUTNAME/"
         fi
+        [ "$CKPTS" = xdisk ] && copy_ckpts final
     fi
     if [ -n "$MONPID" ]; then
         kill "$MONPID" 2>/dev/null; wait "$MONPID" 2>/dev/null
@@ -249,6 +278,8 @@ finish() {
         echo "config_sha256: $(grep " $CFG\$" "$RUN/inputs_sha256.txt" 2>/dev/null | cut -d' ' -f1)"
         echo "num_epochs: $(sed -n 's/^num_epochs: *\([0-9]*\).*/\1/p' "$WORK/mainwork/$CFG" 2>/dev/null)"
         echo "micro_batch_size: ${MB}"
+        echo "checkpoints: $CKPTS$([ "$CKPTS" = xdisk ] && echo " ($RUN/checkpoints, no HF upload)")"
+        echo "precision: $PRECISION ($(grep -o -m1 '"torch_dtype": "[^"]*"' "$RUN/train.log" 2>/dev/null))"
         echo "base_model_revision: ${BASE_REV:-}"
         echo "best_checkpoint: ${BEST}"
         echo "final_model_sha256: $(cat "$RUN/$OUTNAME"/model*.safetensors 2>/dev/null | sha256sum | cut -d' ' -f1)"
@@ -264,8 +295,10 @@ finish() {
         echo
         echo '## author notes'
     } > "$RUN/record.md"
-    run_hf python /hf_sync.py final "${STAMP}_${SLUG}" "$OUTNAME" >> "$RUN/hf_sync.log" 2>&1 \
-        || echo "final HF upload failed, see hf_sync.log" >> "$RUN/record.md"
+    if [ "$CKPTS" = hf ]; then
+        run_hf python /hf_sync.py final "${STAMP}_${SLUG}" "$OUTNAME" >> "$RUN/hf_sync.log" 2>&1 \
+            || echo "final HF upload failed, see hf_sync.log" >> "$RUN/record.md"
+    fi
     MSG="$([ "$STATUS" = completed ] && echo '✅' || echo '❌') ${STAMP}_${SLUG}: $STATUS"
     MSG+=", $(( ($(date +%s) - T0) / 60 )) min, job $SLURM_JOB_ID"
     [ -n "$BEST" ] && MSG+=$'\n'"best: $BEST"
@@ -316,6 +349,42 @@ if [ -n "$EPOCHS" ]; then
     [ "$(grep -c "^num_epochs: $EPOCHS\$" "$WORK/mainwork/$CFG")" -eq 1 ]
     cp "$WORK/mainwork/$CFG" "$RUN/${CFG%.yaml}_ep$EPOCHS.yaml"
 fi
+if [ "$PRECISION" = fp32 ]; then
+    cat > "$WORK/mainwork/c2s_fp32.py" <<'PY'
+"""Master weights in fp32, compute in bf16 autocast.
+
+axolotl 1855055 sets torch_dtype = bfloat16 whenever bf16 is on (utils/config resolve_dtype),
+so the model is loaded and its weights are updated in bf16. register() runs in load_cfg before
+normalize_config(), which calls resolve_dtype by module-global name: the wrapper keeps cfg.bf16
+(Trainer autocast) and loads the model in float32.
+"""
+import torch
+
+import axolotl.utils.config as axolotl_config
+from axolotl.integrations.base import BasePlugin
+
+_resolve_dtype = axolotl_config.resolve_dtype
+
+
+def _resolve_dtype_fp32_master(cfg):
+    _resolve_dtype(cfg)
+    if cfg.bf16:
+        cfg.torch_dtype = torch.float32
+
+
+class Fp32MasterWeightsPlugin(BasePlugin):
+    def register(self, cfg):
+        axolotl_config.resolve_dtype = _resolve_dtype_fp32_master
+PY
+    if grep -q '^plugins:' "$WORK/mainwork/$CFG"; then
+        sed -i '/^plugins:/a\  - c2s_fp32.Fp32MasterWeightsPlugin' "$WORK/mainwork/$CFG"
+    else
+        printf '\nplugins:\n  - c2s_fp32.Fp32MasterWeightsPlugin\n' >> "$WORK/mainwork/$CFG"
+    fi
+    [ "$(grep -c '^  - c2s_fp32.Fp32MasterWeightsPlugin$' "$WORK/mainwork/$CFG")" -eq 1 ]
+    cp "$WORK/mainwork/$CFG" "$RUN/${CFG%.yaml}_fp32.yaml"
+    cp "$WORK/mainwork/c2s_fp32.py" "$RUN/c2s_fp32.py"
+fi
 
 nvidia-smi > "$RUN/nvidia-smi.txt"
 
@@ -324,7 +393,7 @@ run() {
         --bind "$WORK/mainwork:/workspace/axolotl/mainwork" \
         --bind "$WORK/last_run_prepared:/workspace/axolotl/last_run_prepared" \
         --bind "$WORK/hf:/hf" --bind "$WORK/triton:/triton" \
-        --env HF_HOME=/hf,TRITON_CACHE_DIR=/triton,HOME=/tmp,PYTHONFAULTHANDLER=1 \
+        --env HF_HOME=/hf,TRITON_CACHE_DIR=/triton,HOME=/tmp,PYTHONFAULTHANDLER=1$PYENV \
         --pwd /workspace/axolotl "$SIF" "$@"
 }
 
