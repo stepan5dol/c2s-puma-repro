@@ -1,0 +1,42 @@
+Bootstrap: docker
+From: ubuntu:22.04
+
+# Analysis image: the manuscript violins, the reverse task, energy and the grid decider, on the Puma CPUs.
+# No R and no limma: panel C is not part of the grid decision and the violins do not use it.
+# Training and inference stay in c2s-train.sif (/opt/venv, /opt/infer); this image is separate so that
+# nothing in their environments changes. The 7 GB of data are inside (%files
+    data/GSE275938_compiled_counts.csv /data/BPD-PH/GSE275938_compiled_counts.csv
+    data/GSE275938_cell_metadata.csv /data/BPD-PH/GSE275938_cell_metadata.csv
+    data/rat.ho.azi.integrated.h5ad /data/rat.ho.azi.integrated.h5ad
+    data/he_lung_atlas.h5ad /data/he_lung_atlas.h5ad
+    data/2022FetalLungIntCounts.h5ad /data/2022FetalLungIntCounts.h5ad
+    data/cell_types_config.json /data/cell_types_config.json
+
+%post
+    set -eux
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update
+    apt-get install -y --no-install-recommends curl ca-certificates fontconfig fonts-dejavu-core \
+        build-essential libhdf5-dev
+    rm -rf /var/lib/apt/lists/*
+    curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local/bin UV_NO_MODIFY_PATH=1 sh
+    export UV_PYTHON_INSTALL_DIR=/opt/python UV_LINK_MODE=copy UV_NO_CACHE=1
+    uv python install 3.13.12
+    uv venv --python 3.13.12 /opt/analysis
+    # versions of the Mac environment on which every number so far was computed (2026-10-30)
+    uv pip install --python /opt/analysis/bin/python \
+        numpy==2.4.4 pandas==2.2.3 scipy==1.17.1 scikit-learn==1.8.0 scanpy==1.12 anndata==0.12.10 \
+        gseapy==1.3.0 matplotlib==3.10.8 matplotlib-venn openpyxl==3.1.5 h5py==3.15.1 requests==2.32.5 \
+        natsort==8.4.0 numba==0.64.0 llvmlite==0.46.0
+    /opt/analysis/bin/python -c "import scanpy, anndata, gseapy, sklearn, scipy; print('imports ok')"
+    uv pip freeze --python /opt/analysis/bin/python > /opt/analysis_freeze.txt
+
+%environment
+    export VIRTUAL_ENV=/opt/analysis
+    export PATH=/opt/analysis/bin:$PATH
+    export MPLBACKEND=Agg
+    export MPLCONFIGDIR=/tmp/mpl
+    export XDG_CACHE_HOME=/tmp/cache
+
+%runscript
+    exec python "$@"
