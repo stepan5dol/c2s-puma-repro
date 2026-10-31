@@ -1,6 +1,7 @@
 #!/bin/bash
 # Put the repository and the data on xdisk in one rsync (one password + Duo), then mark the commit with a tag in local git.
-# (macOS ships openrsync: no --info=progress2, so --progress is used.)
+# (macOS ships openrsync: no --info=progress2, so --progress is used. -z: the counts csv shrinks ~20x, rat h5ad ~8x, the
+#  human atlases ~2.4x; ssh keepalives because filexfer closed an idle connection on 2026-10-30.)
 # Run in a normal terminal from this folder:  bash deploy.sh
 # Result on Puma:  /xdisk/vkalin/dolzhenko/c2s/repo/        the working tree (no .git), incl. grid/tree with its small data files
 #                  /xdisk/vkalin/dolzhenko/c2s/data_src/    the 6 data files of the analysis image (~7 GB)
@@ -27,7 +28,7 @@ for f in "$A/BPD-PH/GSE275938_compiled_counts.csv" "$A/BPD-PH/GSE275938_cell_met
     ln -s "$f" "$STAGE/data_src/$(basename "$f")"
 done
 printf 'commit %s\ntag %s\ndate %s\n' "$(git rev-parse HEAD)" "$TAG" "$(date '+%F %T')" > REVISION
-rsync -aL --partial --progress --exclude=.git --exclude=__pycache__ --exclude=commit.sh --exclude=deploy.sh \
+rsync -aLz --partial --progress --timeout=300 -e 'ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=6' --exclude=.git --exclude=__pycache__ --exclude=commit.sh --exclude=deploy.sh \
     "$STAGE/" "$HOST:$DEST/"
 # the tag is set only after the copy succeeded (set -e stops the script before this line if rsync fails)
 git -c user.name=stepan5dol -c user.email=stepan5dol@users.noreply.github.com tag -a "$TAG" -m "copied to $DEST on $(date '+%F %T')"
