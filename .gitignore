@@ -3,3 +3,4 @@ build/
 *.sif
 *.sif.part
 *.env
+__pycache__/

@@ -54,10 +54,21 @@ case $PRECISION in
     fp32) SLUG+=-fp32; PYENV=,PYTHONPATH=/workspace/axolotl/mainwork ;;
     *) echo "PRECISION must be bf16 or fp32" >&2; exit 1 ;;
 esac
+LR=${LR:-}
+SEED=${SEED:-}
+NO_EARLY_STOP=${NO_EARLY_STOP:-0}
+if [ -n "$LR" ]; then
+    [[ $LR =~ ^[0-9]+(\.[0-9]+)?e-[0-9]+$ ]] || { echo "LR must look like 3e-5" >&2; exit 1; }
+    SLUG+=-lr$LR
+fi
+if [ -n "$SEED" ]; then
+    [[ $SEED =~ ^[0-9]+$ ]] || { echo "SEED must be an integer" >&2; exit 1; }
+    SLUG+=-s$SEED
+fi
 CKPTS=${CKPTS:-hf}
-[[ $CKPTS =~ ^(hf|xdisk)$ ]] || { echo "CKPTS must be hf or xdisk" >&2; exit 1; }
+[[ $CKPTS =~ ^(hf|xdisk|none)$ ]] || { echo "CKPTS must be hf, xdisk or none" >&2; exit 1; }
 
-STAMP=$(date +%Y-%m-%d_%H%M)
+STAMP=${RUN_STAMP:-$(date +%Y-%m-%d_%H%M)}
 BASE=$HOME/c2s
 DATA=/xdisk/vkalin/dolzhenko/c2s
 RUN=$DATA/results/${STAMP}_${SLUG}
@@ -210,7 +221,9 @@ copy_ckpts() {
 
 uploader() {
     while sleep 300; do
-        if [ "$CKPTS" = xdisk ]; then
+        if [ "$CKPTS" = none ]; then
+            :
+        elif [ "$CKPTS" = xdisk ]; then
             copy_ckpts sync || true
         else
             run_hf python /hf_sync.py sync "${STAMP}_${SLUG}" "$OUTNAME" >> "$RUN/hf_sync.log" 2>&1 || true
@@ -235,12 +248,19 @@ finish() {
     BEST=
     BASE_REV=$(cat "$WORK/hf/hub/models--$BASE_ID/refs/main" 2>/dev/null)
     if [ -d "$OUT" ]; then
-        BEST=$(run python /opt/c2s/finalize_best.py "mainwork/$OUTNAME" \
-            2>> "$RUN/finalize_best.log")
-        if [ -z "$BEST" ] && [ "$STATUS" = completed ]; then
-            STATUS=failed
-            echo "finalize_best.py failed" >> "$RUN/finalize_best.log"
+        if [ "$NO_EARLY_STOP" = 1 ]; then
+            BEST=
+            echo "end of run (no best-checkpoint selection)" > "$OUT/best_checkpoint.txt"
+        else
+            BEST=$(run python /opt/c2s/finalize_best.py "mainwork/$OUTNAME" \
+                2>> "$RUN/finalize_best.log")
+            if [ -z "$BEST" ] && [ "$STATUS" = completed ]; then
+                STATUS=failed
+                echo "finalize_best.py failed" >> "$RUN/finalize_best.log"
+            fi
         fi
+        LASTCK=$(printf '%s\n' "$OUT"/checkpoint-* | sort -V | tail -1)
+        [ -e "$LASTCK/trainer_state.json" ] && cp "$LASTCK/trainer_state.json" "$RUN/trainer_state.json"
         rsync -a --exclude 'checkpoint-*' "$OUT/" "$RUN/$OUTNAME/"
         if [ -n "$BEST" ]; then
             EXCL=(--exclude optimizer.pt)
@@ -276,9 +296,12 @@ finish() {
         echo "source: $HF_SRC@$REV"
         echo "image_sha256: $(cut -d' ' -f1 "$RUN/image.sha256" 2>/dev/null)"
         echo "config_sha256: $(grep " $CFG\$" "$RUN/inputs_sha256.txt" 2>/dev/null | cut -d' ' -f1)"
-        echo "num_epochs: $(sed -n 's/^num_epochs: *\([0-9]*\).*/\1/p' "$WORK/mainwork/$CFG" 2>/dev/null)"
+        echo "num_epochs: $(sed -n 's/^num_epochs: *\([0-9.]*\).*/\1/p' "$WORK/mainwork/$CFG" 2>/dev/null)"
+        echo "learning_rate: $(sed -n 's/^learning_rate: *\([0-9.e-]*\).*/\1/p' "$WORK/mainwork/$CFG" 2>/dev/null)"
+        echo "seed: $(sed -n 's/^seed: *\([0-9]*\).*/\1/p' "$WORK/mainwork/$CFG" 2>/dev/null)"
+        echo "early_stopping_lines: $(grep -c '^early_stopping_patience:' "$WORK/mainwork/$CFG" 2>/dev/null)"
         echo "micro_batch_size: ${MB}"
-        echo "checkpoints: $CKPTS$([ "$CKPTS" = xdisk ] && echo " ($RUN/checkpoints, no HF upload)")"
+        echo "checkpoints: $CKPTS$([ "$CKPTS" = xdisk ] && echo " ($RUN/checkpoints, no HF upload)")$([ "$CKPTS" = none ] && echo " (end-of-run model only)")"
         echo "precision: $PRECISION ($(grep -o -m1 '"torch_dtype": "[^"]*"' "$RUN/train.log" 2>/dev/null))"
         echo "base_model_revision: ${BASE_REV:-}"
         echo "best_checkpoint: ${BEST}"
@@ -348,6 +371,22 @@ if [ -n "$EPOCHS" ]; then
     sed -i "s/^num_epochs: .*/num_epochs: $EPOCHS/" "$WORK/mainwork/$CFG"
     [ "$(grep -c "^num_epochs: $EPOCHS\$" "$WORK/mainwork/$CFG")" -eq 1 ]
     cp "$WORK/mainwork/$CFG" "$RUN/${CFG%.yaml}_ep$EPOCHS.yaml"
+fi
+if [ -n "$LR" ]; then
+    sed -i "s/^learning_rate: .*/learning_rate: $LR/" "$WORK/mainwork/$CFG"
+    [ "$(grep -c "^learning_rate: $LR\$" "$WORK/mainwork/$CFG")" -eq 1 ]
+fi
+if [ -n "$SEED" ]; then
+    sed -i "s/^seed: .*/seed: $SEED/" "$WORK/mainwork/$CFG"
+    [ "$(grep -c "^seed: $SEED\$" "$WORK/mainwork/$CFG")" -eq 1 ]
+fi
+if [ "$NO_EARLY_STOP" = 1 ]; then
+    sed -i -e '/^early_stopping_patience:/d' -e 's/^load_best_model_at_end: .*/load_best_model_at_end: false/' "$WORK/mainwork/$CFG"
+    [ "$(grep -c '^early_stopping_patience:' "$WORK/mainwork/$CFG")" -eq 0 ]
+    [ "$(grep -c '^load_best_model_at_end: false$' "$WORK/mainwork/$CFG")" -eq 1 ]
+fi
+if [ -n "$LR$SEED" ] || [ "$NO_EARLY_STOP" = 1 ]; then
+    cp "$WORK/mainwork/$CFG" "$RUN/${CFG%.yaml}_grid.yaml"
 fi
 if [ "$PRECISION" = fp32 ]; then
     cat > "$WORK/mainwork/c2s_fp32.py" <<'PY'
@@ -461,7 +500,8 @@ done
 if [ "$INFER" = 1 ]; then
     INFER_STATUS=failed
     step finalize_best
-    INFER_BEST=$(run python /opt/c2s/finalize_best.py "mainwork/$OUTNAME" 2>> "$RUN/finalize_best.log")
+    if [ "$NO_EARLY_STOP" = 1 ]; then INFER_BEST="end of run"; else
+        INFER_BEST=$(run python /opt/c2s/finalize_best.py "mainwork/$OUTNAME" 2>> "$RUN/finalize_best.log"); fi
     tg "🏁 ${STAMP}_${SLUG}: training done, best $INFER_BEST, inference: test at $INFER_TEMPS, azithromycin at $AZI_TEMP"
     mkdir -p "$RUN/inference"
     infer_progress &
