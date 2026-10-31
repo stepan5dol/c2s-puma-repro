@@ -44,6 +44,9 @@ for line in open(G / "cells.tsv"):
     m = CELL.fullmatch(name)
     r = Path(run)
     inf, ts = r / "inference_float32" / "test_t10.jsonl", r / "trainer_state.json"
+    if not ts.exists():  # the run of 2026-10-28: only inside the checkpoint folders of the model folder
+        cks = sorted(r.glob("sft_pythia1b_short_full/checkpoint-*/trainer_state.json"), key=lambda q: int(q.parent.name.split("-")[1]))
+        ts = cks[-1] if cks else ts
     scores = RUNS / name / "violins" / "scores.json"
     have = [f.name for f in (inf, ts, scores) if f.exists()]
     if len(have) < 3:

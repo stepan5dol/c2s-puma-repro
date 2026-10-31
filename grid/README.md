@@ -15,19 +15,44 @@ Edge of the explored grid -> one more cell beyond it. The chain stops, and says 
 says stop or finished, when a Slurm job of a cell fails, or when `MAX_CELLS` (default 9) trainings are reached.
 Decisions with their reasons: `grid/decisions/decision_NN.json`; log: `grid/chain.log`.
 
-## Once, before the first call
+## Commands, in order
 
-1. Copy the repository to xdisk (`/xdisk/vkalin/dolzhenko/c2s/repo`) and the data (7 GB) to `data_src/`:
-   `GSE275938_compiled_counts.csv`, `GSE275938_cell_metadata.csv`, `rat.ho.azi.integrated.h5ad`, `he_lung_atlas.h5ad`,
-   `2022FetalLungIntCounts.h5ad`, `cell_types_config.json`.
-2. Build the analysis image (Python only, no R; data inside, ~1 h, an interactive session on a compute node):
-   `interactive -a vkalin -t 04:00:00 -c 8` then `bash grid/build_analysis_image.sh`.
-3. Check the scripts: `sbatch --test-only` on `hpc/train.slurm`, `hpc/infer_only.slurm`, `grid/analyze.slurm` checks only
-   the directives; the first pair of trainings is the real test.
-4. `grid/tree/` is the analysis code of the manuscript with its Mac path prefix; `grid/lib/prepare_root.py` rewrites that
-   one prefix at run time. Rebuild the tree on the Mac with `python3 grid/tools/make_tree.py <AzithroGemma folder>`.
-5. The grid's starting cell `lr1e-4_ep2_s42` is the finished run 2026-10-28_1152. Its fp32 inference
-   (`SETS=test_t10 RUN=<that folder> sbatch hpc/infer_only.slurm`) has to be in `inference_float32/` of that folder;
-   add a line `lr1e-4_ep2_s42<TAB><run folder><TAB>0<TAB>0` to `grid/cells.tsv`.
-   The model of that run is checkpoint-264 (load_best_model_at_end), the other cells are the end of the run; at LR ~0
-   the two differ by almost nothing (eval_loss 2.184 at both steps).
+On the Mac, normal terminal (the sandbox of Claude Code blocks git writes in new folders):
+
+```
+cd ~/Documents/AzithroGemma/retrain_v2/c2s-puma-repro
+bash deploy.sh          # tags the commit, one rsync (password + Duo): repo and the 7 GB of data to /xdisk/vkalin/dolzhenko/c2s/
+```
+
+On Puma (`ssh dolzhenko@hpc.arizona.edu`, then `shell`):
+
+```
+# 1. the analysis image, once (~1 h)
+interactive -a vkalin -t 04:00:00 -c 8
+bash /xdisk/vkalin/dolzhenko/c2s/repo/grid/build_analysis_image.sh
+exit
+
+# 2. the starting cell = the finished run 2026-10-28_1152: its fp32 inference, then one line in cells.tsv
+RUN=/xdisk/vkalin/dolzhenko/c2s/results/2026-10-28_1152_puma-a100mig-repro-ep2-fp32
+RUN=$RUN SETS=test_t10 sbatch /xdisk/vkalin/dolzhenko/c2s/repo/hpc/infer_only.slurm
+mkdir -p /xdisk/vkalin/dolzhenko/c2s/grid
+printf 'lr1e-4_ep2_s42\t%s\t0\t0\n' "$RUN" > /xdisk/vkalin/dolzhenko/c2s/grid/cells.tsv
+
+# 3. stage A: two trainings at once; the chain runs by itself from here
+bash /xdisk/vkalin/dolzhenko/c2s/repo/grid/submit_cells.sh 1e-5:2:42 3e-5:2:42
+```
+
+Note on step 2: `infer_only.slurm` stops if `inference_float32/` already exists in the run folder (it never overwrites).
+If the earlier full fp32 inference of that run finished, `inference_float32/test_t10.jsonl` is already there: skip the sbatch
+line and only write the `cells.tsv` line.
+
+Watch it:  `squeue -u $USER`,  `tail -f /xdisk/vkalin/dolzhenko/c2s/grid/chain.log`,  `ls /xdisk/vkalin/dolzhenko/c2s/grid/decisions`,
+`cat /xdisk/vkalin/dolzhenko/c2s/grid/STOPPED` (exists only when the chain has stopped, with the reason).
+
+## Notes
+
+1. `sbatch --test-only hpc/train.slurm` (and the other scripts) checks only the directives; the first pair of trainings is the real test.
+2. `grid/tree/` is the analysis code of the manuscript with its Mac path prefix; `grid/lib/prepare_root.py` rewrites that one
+   prefix at run time. Rebuild the tree on the Mac with `python3 grid/tools/make_tree.py <AzithroGemma folder>`.
+3. The model of the starting cell is checkpoint-264 (load_best_model_at_end); the other cells are the end of the run. At LR ~0 the two
+   differ by almost nothing (eval_loss 2.184 at both steps).

@@ -31,8 +31,8 @@ note() { echo "$(date '+%F %T') $*" | tee -a "$GRID/chain.log"; }
 note "analysis job $SLURM_JOB_ID on $(hostname)"
 [ -s "$SIF" ] || { note "FAIL: no image $SIF (build it with grid/build_analysis_image.sh)"; exit 1; }
 ARUN() { apptainer exec --cleanenv --no-home --writable-tmpfs \
-    --bind "$WORK:/work" --bind "$GRID:/grid" --bind "$REPO:/repo:ro" --bind "$D/results:/results:ro" \
-    --env C2S_ROOT=/work/root,C2S_WORK=/grid,C2S_RESULTS=/grid/reference,PYTHONPATH=/repo/grid/lib,PYTHONFAULTHANDLER=1,HOME=/tmp \
+    --bind "$WORK:/work" --bind "$D:$D" --bind "$REPO:/repo:ro" \
+    --env C2S_ROOT=/work/root,C2S_WORK=$GRID,C2S_RESULTS=$GRID/reference,PYTHONPATH=/repo/grid/lib,PYTHONFAULTHANDLER=1,HOME=/tmp \
     "$SIF" "$@"; }
 
 # working root: the manuscript code with its path prefix rewritten, data linked from the image
@@ -40,7 +40,7 @@ ARUN python /repo/grid/lib/prepare_root.py /repo/grid/tree /data /work/root >> "
 
 # the cells: grid/cells.tsv has one line per submitted cell: name  run_folder  train_job  infer_job
 [ -s "$GRID/cells.tsv" ] || { note "FAIL: no $GRID/cells.tsv"; exit 1; }
-python3 - "$GRID" <<'PY'
+ARUN python - "$GRID" <<'PY'
 import json, sys
 from pathlib import Path
 g = Path(sys.argv[1]); runs = {}
@@ -49,19 +49,22 @@ for line in open(g / "cells.tsv"):
     r = Path(run)
     inf = r / "inference_float32" / "test_t10.jsonl"
     ts = r / "trainer_state.json"
+    if not ts.exists():
+        cks = sorted(r.glob("sft_pythia1b_short_full/checkpoint-*/trainer_state.json"), key=lambda q: int(q.parent.name.split("-")[1]))
+        ts = cks[-1] if cks else ts
     if inf.exists() and ts.exists() and (g / "runs" / name / "violins" / "scores.json").exists() is False:
         runs[name] = str(inf)
 json.dump(runs, open(g / "todo_runs.json", "w"))
 print(len(runs), "cell(s) need the violins:", list(runs))
 PY
-if [ "$(python3 -c "import json;print(len(json.load(open('$GRID/todo_runs.json'))))")" -gt 0 ]; then
+if [ "$(ARUN python -c "import json;print(len(json.load(open('$GRID/todo_runs.json'))))")" -gt 0 ]; then
     note "violins for the new cells (one pass over the counts CSV)"
-    ARUN python -u /repo/grid/lib/violins_only.py /grid/todo_runs.json >> "$GRID/chain.log" 2>&1
+    ARUN python -u /repo/grid/lib/violins_only.py "$GRID/todo_runs.json" >> "$GRID/chain.log" 2>&1
 fi
 
 note "decider"
 rm -f "$GRID/next_cells.txt"
-ARUN python -u /repo/grid/lib/chain_step.py --grid /grid --repo /repo --max-cells "$MAX_CELLS" 2>&1 | tee -a "$GRID/chain.log"
+ARUN python -u /repo/grid/lib/chain_step.py --grid "$GRID" --repo /repo --max-cells "$MAX_CELLS" 2>&1 | tee -a "$GRID/chain.log"
 # the rule's next cells, if any: submit them (outside the container, from this job; the rule and the cap are fixed in code)
 if [ -s "$GRID/next_cells.txt" ]; then
     note "submitting: $(cat "$GRID/next_cells.txt")"
