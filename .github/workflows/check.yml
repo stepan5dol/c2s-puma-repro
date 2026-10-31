@@ -11,8 +11,8 @@ jobs:
       - uses: actions/checkout@v4
       - name: bash and python syntax
         run: |
-          bash -n hpc/train.slurm
-          python3 -m py_compile scripts/*.py
+          bash -n hpc/train.slurm hpc/infer_only.slurm grid/submit_cells.sh grid/analyze.slurm grid/build_analysis_image.sh
+          python3 -m py_compile scripts/*.py grid/lib/*.py grid/tools/*.py
           sed -n "/<<'EOF'$/,/^EOF$/p" hpc/train.slurm | sed '1d;$d' > /tmp/hf_sync.py
           python3 -m py_compile /tmp/hf_sync.py
       - name: finalize_best.py on a fake run
@@ -33,6 +33,31 @@ jobs:
           test ! -e $o/model.safetensors
           rm $o/checkpoint-*/trainer_state.json
           ! python3 scripts/finalize_best.py $o
+      - name: grid decider walks the whole grid
+        run: |
+          set -eux
+          python3 -m pip install --quiet numpy scipy scikit-learn
+          cd grid/lib && python3 decide.py --selftest-walk
+      - name: train.slurm config edits (LR, SEED, EPOCHS, no early stopping)
+        run: |
+          set -eux
+          cat > /tmp/c.yaml <<'Y'
+          num_epochs: 6   # ceiling
+          learning_rate: 1e-4
+          load_best_model_at_end: true
+          early_stopping_patience: 4   # x
+          seed: 42
+          Y
+          sed -i 's/^ *//' /tmp/c.yaml
+          LR=3e-5; SEED=7; EPOCHS=4
+          sed -i "s/^num_epochs: .*/num_epochs: $EPOCHS/" /tmp/c.yaml
+          sed -i "s/^learning_rate: .*/learning_rate: $LR/" /tmp/c.yaml
+          sed -i "s/^seed: .*/seed: $SEED/" /tmp/c.yaml
+          sed -i -e '/^early_stopping_patience:/d' -e 's/^load_best_model_at_end: .*/load_best_model_at_end: false/' /tmp/c.yaml
+          grep -x 'num_epochs: 4' /tmp/c.yaml; grep -x 'learning_rate: 3e-5' /tmp/c.yaml; grep -x 'seed: 7' /tmp/c.yaml
+          grep -x 'load_best_model_at_end: false' /tmp/c.yaml; ! grep early_stopping /tmp/c.yaml
+          # the same lines must be in train.slurm
+          for k in 's/^learning_rate: .*/learning_rate: $LR/' 's/^seed: .*/seed: $SEED/' "early_stopping_patience" "load_best_model_at_end: false"; do grep -qF -- "$k" hpc/train.slurm; done
       - name: build_gemma_segments.py on fake rows
         run: |
           set -eux
