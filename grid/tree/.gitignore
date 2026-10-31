@@ -1,0 +1,6 @@
+# code and the manifest go to git; the small data files of the tree are copied to xdisk with rsync and are not published
+*
+!*/
+!*.py
+!MANIFEST.json
+!.gitignore
