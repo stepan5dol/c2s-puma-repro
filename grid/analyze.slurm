@@ -20,7 +20,10 @@ set -euo pipefail
 
 D=/xdisk/vkalin/dolzhenko/c2s
 GRID=$D/grid                      # state, decisions, per-run outputs
-SIF=$D/images/c2s-analysis.sif
+# the analysis image: built on GitHub from apptainer/c2s-analysis.def, its release tag is the hash of that recipe
+SIF_TAG=analysis-sif-$(sha256sum "${REPO:-$D/repo}/apptainer/c2s-analysis.def" | cut -c1-12)
+SIF=$D/images/$SIF_TAG.sif
+SIF_URL=https://github.com/stepan5dol/c2s-puma-repro/releases/download/$SIF_TAG
 REPO=${REPO:-$D/repo}             # a checkout of this repository (grid/lib, grid/tree, hpc)
 MAX_CELLS=${MAX_CELLS:-9}
 WORK=/tmp/c2s_analyze_$SLURM_JOB_ID
@@ -29,14 +32,31 @@ trap 'rm -rf "$WORK"' EXIT
 note() { echo "$(date '+%F %T') $*" | tee -a "$GRID/chain.log"; }
 
 note "analysis job $SLURM_JOB_ID on $(hostname)"
-[ -s "$SIF" ] || { note "FAIL: no image $SIF (build it with grid/build_analysis_image.sh)"; exit 1; }
+fetch_image() {
+    mkdir -p "$D/images"
+    curl -fsSL --retry 3 "$SIF_URL/c2s-analysis.sif.sha256" -o "$SIF.sha256" || return 1
+    curl -fL --retry 3 -sS "$SIF_URL/c2s-analysis.sif" -o "$SIF.part" || return 1
+    [ "$(sha256sum < "$SIF.part" | cut -d' ' -f1)" = "$(cut -d' ' -f1 "$SIF.sha256")" ] || { note "sha256 of the download differs"; return 1; }
+    mv "$SIF.part" "$SIF"
+}
+if [ ! -s "$SIF" ]; then
+    note "downloading the analysis image $SIF_TAG"
+    fetch_image || { note "FAIL: could not download $SIF_URL/c2s-analysis.sif (did the build-analysis-sif workflow finish?)"; exit 1; }
+fi
+# the data: deploy.sh put them flat in data_src; the code wants the counts under BPD-PH/
+mkdir -p "$WORK/data/BPD-PH"
+for f in GSE275938_compiled_counts.csv GSE275938_cell_metadata.csv; do ln -s "$D/data_src/$f" "$WORK/data/BPD-PH/$f"; done
+for f in rat.ho.azi.integrated.h5ad he_lung_atlas.h5ad 2022FetalLungIntCounts.h5ad cell_types_config.json; do ln -s "$D/data_src/$f" "$WORK/data/$f"; done
+for f in "$WORK"/data/BPD-PH/* "$WORK"/data/*.h5ad "$WORK"/data/*.json; do
+    [ -s "$f" ] || { note "FAIL: missing data file $(readlink "$f") (run deploy.sh)"; exit 1; }
+done
 ARUN() { apptainer exec --cleanenv --no-home --writable-tmpfs \
     --bind "$WORK:/work" --bind "$D:$D" --bind "$REPO:/repo:ro" \
     --env C2S_ROOT=/work/root,C2S_WORK=$GRID,C2S_RESULTS=$GRID/reference,PYTHONPATH=/repo/grid/lib,PYTHONFAULTHANDLER=1,HOME=/tmp \
     "$SIF" "$@"; }
 
-# working root: the manuscript code with its path prefix rewritten, data linked from the image
-ARUN python /repo/grid/lib/prepare_root.py /repo/grid/tree /data /work/root >> "$GRID/chain.log" 2>&1
+# working root: the manuscript code with its path prefix rewritten, data linked from data_src
+ARUN python /repo/grid/lib/prepare_root.py /repo/grid/tree /work/data /work/root >> "$GRID/chain.log" 2>&1
 
 # the cells: grid/cells.tsv has one line per submitted cell: name  run_folder  train_job  infer_job
 [ -s "$GRID/cells.tsv" ] || { note "FAIL: no $GRID/cells.tsv"; exit 1; }

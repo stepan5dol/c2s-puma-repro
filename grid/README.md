@@ -17,34 +17,24 @@ Decisions with their reasons: `grid/decisions/decision_NN.json`; log: `grid/chai
 
 ## Commands, in order
 
-On the Mac, normal terminal (the sandbox of Claude Code blocks git writes in new folders):
+On the Mac, normal terminal (the sandbox of Claude Code blocks git writes):
 
 ```
 cd ~/Documents/AzithroGemma/retrain_v2/c2s-puma-repro
-bash deploy.sh          # tags the commit, one rsync (password + Duo): repo and the 7 GB of data to /xdisk/vkalin/dolzhenko/c2s/
+bash commit.sh          # commit and push; the push starts the GitHub build of the analysis image (Actions: build-analysis-sif, ~20 min)
+bash deploy.sh          # tags the commit, one rsync (password + Duo): repo to xdisk; the 7 GB of data only if they changed
 ```
 
-On Puma (`ssh dolzhenko@hpc.arizona.edu`, then `shell`):
+On Puma (`ssh dolzhenko@hpc.arizona.edu`, then `shell`), once the build-analysis-sif run is green:
 
 ```
-# 1. the analysis image, once (~1 h)
-interactive -a vkalin -t 04:00:00 -c 8
-bash /xdisk/vkalin/dolzhenko/c2s/repo/grid/build_analysis_image.sh
-exit
-
-# 2. the starting cell = the finished run 2026-10-28_1152: its fp32 inference, then one line in cells.tsv
-RUN=/xdisk/vkalin/dolzhenko/c2s/results/2026-10-28_1152_puma-a100mig-repro-ep2-fp32
-RUN=$RUN SETS=test_t10 sbatch /xdisk/vkalin/dolzhenko/c2s/repo/hpc/infer_only.slurm
-mkdir -p /xdisk/vkalin/dolzhenko/c2s/grid
-printf 'lr1e-4_ep2_s42\t%s\t0\t0\n' "$RUN" > /xdisk/vkalin/dolzhenko/c2s/grid/cells.tsv
-
-# 3. stage A: two trainings at once; the chain runs by itself from here
-bash /xdisk/vkalin/dolzhenko/c2s/repo/grid/submit_cells.sh 1e-5:2:42 3e-5:2:42
+bash /xdisk/vkalin/dolzhenko/c2s/repo/grid/start.sh
 ```
 
-Note on step 2: `infer_only.slurm` stops if `inference_float32/` already exists in the run folder (it never overwrites).
-If the earlier full fp32 inference of that run finished, `inference_float32/test_t10.jsonl` is already there: skip the sbatch
-line and only write the `cells.tsv` line.
+`start.sh` checks that the image is published and the data are in `data_src`, queues the fp32 inference of the starting
+cell (run 2026-10-28_1152) unless it is already there, writes `cells.tsv`, and queues stage A (1e-5 and 3e-5, 2 epochs).
+The first analysis job downloads the image from the GitHub release (tag = hash of `apptainer/c2s-analysis.def`) into
+`/xdisk/vkalin/dolzhenko/c2s/images/` and checks its sha256; later jobs reuse it. Nothing is built on Puma.
 
 Watch it:  `squeue -u $USER`,  `tail -f /xdisk/vkalin/dolzhenko/c2s/grid/chain.log`,  `ls /xdisk/vkalin/dolzhenko/c2s/grid/decisions`,
 `cat /xdisk/vkalin/dolzhenko/c2s/grid/STOPPED` (exists only when the chain has stopped, with the reason).

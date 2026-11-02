@@ -4,13 +4,9 @@ From: ubuntu:22.04
 # Analysis image: the manuscript violins, the reverse task, energy and the grid decider, on the Puma CPUs.
 # No R and no limma: panel C is not part of the grid decision and the violins do not use it.
 # Training and inference stay in c2s-train.sif (/opt/venv, /opt/infer); this image is separate so that
-# nothing in their environments changes. The 7 GB of data are inside (%files
-    data/GSE275938_compiled_counts.csv /data/BPD-PH/GSE275938_compiled_counts.csv
-    data/GSE275938_cell_metadata.csv /data/BPD-PH/GSE275938_cell_metadata.csv
-    data/rat.ho.azi.integrated.h5ad /data/rat.ho.azi.integrated.h5ad
-    data/he_lung_atlas.h5ad /data/he_lung_atlas.h5ad
-    data/2022FetalLungIntCounts.h5ad /data/2022FetalLungIntCounts.h5ad
-    data/cell_types_config.json /data/cell_types_config.json
+# nothing in their environments changes. Built on GitHub (.github/workflows/build-analysis-sif.yml) and published as a
+# release asset; grid/analyze.slurm downloads it. The data are not inside: the job binds them from
+# /xdisk/vkalin/dolzhenko/c2s/data_src (put there by deploy.sh).
 
 %post
     set -eux

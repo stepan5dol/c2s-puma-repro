@@ -11,7 +11,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: bash and python syntax
         run: |
-          bash -n hpc/train.slurm hpc/infer_only.slurm grid/submit_cells.sh grid/analyze.slurm grid/build_analysis_image.sh
+          bash -n hpc/train.slurm hpc/infer_only.slurm grid/submit_cells.sh grid/analyze.slurm grid/start.sh
           python3 -m py_compile scripts/*.py grid/lib/*.py grid/tools/*.py
           sed -n "/<<'EOF'$/,/^EOF$/p" hpc/train.slurm | sed '1d;$d' > /tmp/hf_sync.py
           python3 -m py_compile /tmp/hf_sync.py

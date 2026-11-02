@@ -8,7 +8,7 @@ the code expects, and checks that no Mac prefix is left.
 usage: prepare_root.py TREE DATA DST
   TREE  grid/tree of the repo
   DATA  folder with BPD-PH/GSE275938_*.csv, rat.ho.azi.integrated.h5ad, he_lung_atlas.h5ad, 2022FetalLungIntCounts.h5ad,
-        cell_types_config.json   (/data inside c2s-analysis.sif)
+        cell_types_config.json   (made by grid/analyze.slurm from data_src)
 """
 import shutil
 import sys

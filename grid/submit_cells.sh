@@ -6,13 +6,24 @@
 # Run the first call yourself on the login node (UA policy: an agent must not submit jobs).
 #
 # usage:  bash grid/submit_cells.sh LR:EPOCHS:SEED [LR:EPOCHS:SEED ...]       e.g.  1e-5:2:42 3e-5:2:42
+#         AFTER=<job id>  also make the analysis job wait for that job (grid/start.sh: the inference of the starting cell)
+#         --check         only check the prerequisites, submit nothing
 set -euo pipefail
 D=/xdisk/vkalin/dolzhenko/c2s
 GRID=$D/grid
 REPO=${REPO:-$(cd "$(dirname "$0")/.." && pwd)}
 mkdir -p "$D/logs" "$GRID"
-[ -s "$D/images/c2s-analysis.sif" ] || { echo "no $D/images/c2s-analysis.sif: build it first (grid/build_analysis_image.sh)" >&2; exit 1; }
+# the analysis image (built on GitHub, downloaded by the analysis job) must at least be published
+SIF_TAG=analysis-sif-$(sha256sum "$REPO/apptainer/c2s-analysis.def" | cut -c1-12)
+[ -s "$D/images/$SIF_TAG.sif" ] || curl -fsIL -o /dev/null \
+    "https://github.com/stepan5dol/c2s-puma-repro/releases/download/$SIF_TAG/c2s-analysis.sif.sha256" \
+    || { echo "analysis image $SIF_TAG is not on GitHub yet: wait for the build-analysis-sif workflow (Actions tab of the repo)" >&2; exit 1; }
+for f in GSE275938_compiled_counts.csv GSE275938_cell_metadata.csv rat.ho.azi.integrated.h5ad he_lung_atlas.h5ad 2022FetalLungIntCounts.h5ad cell_types_config.json; do
+    [ -s "$D/data_src/$f" ] || { echo "missing $D/data_src/$f: run deploy.sh on the Mac" >&2; exit 1; }
+done
 [ -s "$D/images/c2s-train.sif" ] || { echo "no $D/images/c2s-train.sif" >&2; exit 1; }
+[ "${1:-}" = --check ] && exit 0
+[ $# -gt 0 ] || { echo "no cells given" >&2; exit 1; }
 mkdir -p "$GRID/reference" && cp -n "$REPO/grid/reference/identity_scores.json" "$GRID/reference/"
 INF_JOBS=""
 for cell in "$@"; do
@@ -33,5 +44,5 @@ for cell in "$@"; do
     INF_JOBS+="${INF_JOBS:+:}$INFER"
 done
 # the analysis waits for all inferences of this call; if one of them fails, it is cancelled and the mail says so
-sbatch --parsable --job-name=c2s-analyze --dependency=afterok:$INF_JOBS --kill-on-invalid-dep=yes \
+sbatch --parsable --job-name=c2s-analyze --dependency=afterok:$INF_JOBS${AFTER:+:$AFTER} --kill-on-invalid-dep=yes \
     --export=ALL,REPO="$REPO" "$REPO/grid/analyze.slurm" | tee -a "$GRID/chain.log"

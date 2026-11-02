@@ -1,0 +1,57 @@
+name: build-analysis-sif
+
+# Builds c2s-analysis.sif (Python environment only, no data) and publishes it as a release asset with the tag
+# analysis-sif-<first 12 hex of sha256 of apptainer/c2s-analysis.def>. grid/analyze.slurm computes the same tag from
+# the deployed recipe and downloads that asset, so the image on Puma always matches the recipe in the repo.
+
+on:
+  push:
+    branches: [main]
+    paths: [apptainer/c2s-analysis.def, .github/workflows/build-analysis-sif.yml]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Tag from the recipe
+        run: echo "TAG=analysis-sif-$(sha256sum apptainer/c2s-analysis.def | cut -c1-12)" | tee -a "$GITHUB_ENV"
+
+      - name: Already published?
+        id: have
+        run: |
+          if gh release view "$TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "skip=1" >> "$GITHUB_OUTPUT"; echo "$TAG is already published"
+          fi
+
+      - uses: eWaterCycle/setup-apptainer@v2
+        if: steps.have.outputs.skip != '1'
+
+      - name: Build and check
+        if: steps.have.outputs.skip != '1'
+        run: |
+          set -euxo pipefail
+          sudo mkdir -p /mnt/work && sudo chown "$USER" /mnt/work
+          sudo -E env APPTAINER_TMPDIR=/mnt/work/tmp APPTAINER_CACHEDIR=/mnt/work/cache \
+            bash -c 'mkdir -p "$APPTAINER_TMPDIR" "$APPTAINER_CACHEDIR" && apptainer build /mnt/work/c2s-analysis.sif apptainer/c2s-analysis.def'
+          sudo chown "$USER" /mnt/work/c2s-analysis.sif
+          apptainer exec /mnt/work/c2s-analysis.sif python -c "import scanpy, anndata, gseapy, sklearn, scipy, numba, h5py; print('imports ok')"
+          apptainer exec /mnt/work/c2s-analysis.sif cat /opt/analysis_freeze.txt > /mnt/work/c2s-analysis.freeze.txt
+          cd /mnt/work && sha256sum c2s-analysis.sif | tee c2s-analysis.sif.sha256 && ls -l c2s-analysis.sif
+          # a release asset may not exceed 2 GiB
+          test "$(stat -c %s c2s-analysis.sif)" -lt 2147483648
+
+      - name: Publish
+        if: steps.have.outputs.skip != '1'
+        run: |
+          gh release create "$TAG" -R "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --latest=false \
+            --title "$TAG" --notes "c2s-analysis.sif built from apptainer/c2s-analysis.def at ${GITHUB_SHA::7}" \
+            /mnt/work/c2s-analysis.sif /mnt/work/c2s-analysis.sif.sha256 /mnt/work/c2s-analysis.freeze.txt
