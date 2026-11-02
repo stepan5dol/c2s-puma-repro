@@ -1,0 +1,65 @@
+#!/usr/bin/env python3
+"""apptainer stub: maps --bind paths and imitates the commands train.slurm and infer_only.slurm run in c2s-train.sif."""
+import json, os, re, sys
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import mockdata
+
+a = sys.argv[1:]
+sub = a.pop(0)
+binds, env, pwd, app = [], {}, "/", None
+while a and a[0].startswith("--"):
+    o = a.pop(0)
+    if o == "--bind":
+        src, dst = a.pop(0).split(":")[:2]; binds.append((dst, src))
+    elif o == "--env":
+        for kv in re.split(r",(?=[A-Z_]+=)", a.pop(0)):
+            k, v = kv.split("=", 1); env[k] = v
+    elif o in ("--env-file", "--pwd", "--app"):
+        v = a.pop(0)
+        pwd = v if o == "--pwd" else pwd
+        app = v if o == "--app" else app
+sif, cmd = a[0], a[1:]
+
+
+def host(p):
+    if not p.startswith("/"):
+        p = os.path.join(pwd, p)
+    for dst, src in sorted(binds, key=lambda b: -len(b[0])):
+        if p == dst or p.startswith(dst + "/"):
+            return src + p[len(dst):]
+    return p
+
+
+if sub == "run" and app == "infer":          # the runscript of the infer app is python
+    cmd = ["python"] + cmd
+if cmd[:2] == ["cat", "/opt/c2s/build_info.txt"]:
+    print("axolotl: stub\nPython 3.12.13")
+elif cmd[0] == "cat" and cmd[1] in ("/opt/c2s/run_test.py", "/opt/c2s/run_azi.py"):
+    print('import os\nfrom vllm import LLM\nllm = LLM(model=os.environ["MODEL_DIR"], dtype="bfloat16")')
+elif cmd[0] == "test":
+    pass
+elif cmd[:2] == ["python", "-c"]:
+    print("2.7.0 12.8 NVIDIA A100 80GB PCIe MIG 3g.40gb" if "torch" in cmd[2] else "")
+elif cmd[:2] == ["axolotl", "preprocess"]:
+    print("preprocess stub")
+elif cmd[:2] == ["axolotl", "train"]:
+    cfg = open(host(cmd[2])).read()
+    assert "early_stopping_patience" not in cfg and "load_best_model_at_end: false" in cfg, "NO_EARLY_STOP edits missing"
+    out = host(re.search(r"^output_dir: (.*)$", cfg, re.M)[1])
+    os.makedirs(f"{out}/checkpoint-10", exist_ok=True)
+    json.dump({"log_history": [{"eval_loss": 2.1, "step": 10}]}, open(f"{out}/checkpoint-10/trainer_state.json", "w"))
+    json.dump({"torch_dtype": "float32"}, open(f"{out}/config.json", "w"))
+    open(f"{out}/model.safetensors", "wb").write(b"end-of-run weights")
+    print('"torch_dtype": "float32"')
+elif cmd[0] == "python" and cmd[1] in ("/code/run_test.py", "/opt/c2s/run_test.py"):
+    code = open(host(cmd[1])).read()
+    dtype = re.search(r'dtype="(\w+)"', code)[1]
+    if os.environ.get("MOCK_FORCE_DTYPE"):
+        dtype = os.environ["MOCK_FORCE_DTYPE"]
+    model = host(env["MODEL_DIR"])
+    assert os.path.exists(f"{model}/model.safetensors"), f"no model in {model}"
+    assert os.path.exists(host(env["TEST_PATH"])), "no test set"
+    print(f"INFO non-default args: {{'dtype': '{dtype}', 'model': '{env['MODEL_DIR']}'}}")
+    open(host(env["OUT_PATH"]), "w").write(json.dumps({"model_host_path": model, "dtype": dtype, "T": env["TEMPERATURE"]}) + "\n")
+else:
+    sys.stderr.write(f"apptainer stub: unexpected command {cmd}\n"); sys.exit(1)

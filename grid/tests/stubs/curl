@@ -1,0 +1,18 @@
+#!/usr/bin/env python3
+"""curl stub: HF downloads get fake files with matching checksums; HEAD requests and telegram succeed."""
+import os, sys
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import mockdata
+
+a = sys.argv[1:]
+if "-K" in a or any(x.startswith("-") and not x.startswith("--") and "I" in x for x in a):
+    sys.exit(0)
+url = next(x for x in a if x.startswith("http"))
+out = a[a.index("-o") + 1] if "-o" in a else None
+if "/resolve/" not in url:
+    sys.stderr.write(f"curl stub: unexpected url {url}\n"); sys.exit(22)
+data = mockdata.for_url(url)
+if out:
+    open(out, "wb").write(data)
+else:
+    sys.stdout.buffer.write(data)

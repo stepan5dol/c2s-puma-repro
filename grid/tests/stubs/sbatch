@@ -1,0 +1,12 @@
+#!/usr/bin/env python3
+"""sbatch stub: records the job (options, script, full environment) in $MOCK_QUEUE and prints its id."""
+import json, os, sys
+q = os.environ["MOCK_QUEUE"]; os.makedirs(q, exist_ok=True)
+n = len([f for f in os.listdir(q) if f.endswith(".json")]) + 1001
+opts, a = {}, sys.argv[1:]
+script = a[-1]
+for x in a[:-1]:
+    if x.startswith("--") and "=" in x:
+        k, v = x[2:].split("=", 1); opts[k] = v
+json.dump({"id": n, "opts": opts, "script": script, "env": dict(os.environ)}, open(f"{q}/{n}.json", "w"))
+print(n)

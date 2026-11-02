@@ -1,6 +1,7 @@
 #!/bin/bash
-# Queue grid cells on Puma. For every cell: one training, then (afterok) one fp32 inference of the test set at
-# T 1.0; for all cells of the call together: one analysis job (grid/analyze.slurm) after all their inferences.
+# Queue grid cells on Puma. For every cell: one job that trains and then, on the same GPU, runs the fp32 inference of
+# the test set at T 1.0 (train.slurm INFER_FP32=1); for all cells of the call together: one analysis job
+# (grid/analyze.slurm) after all of them.
 # The analysis job decides what to train next and calls this script again for those cells, so after the first
 # call the grid runs by itself until the rule says stop, a job fails, or the cap (MAX_CELLS) is reached.
 # Run the first call yourself on the login node (UA policy: an agent must not submit jobs).
@@ -34,15 +35,15 @@ for cell in "$@"; do
     grep -q "^$NAME	" "$GRID/cells.tsv" 2>/dev/null && { echo "cell $NAME is already in the grid" >&2; exit 1; }
     STAMP=$(date +%Y-%m-%d_%H%M%S)
     RUN=$D/results/${STAMP}_puma-a100mig-repro-ep${EP}-fp32-lr${LR}-s${SEED}
-    # time of the training: 2.5 h per epoch (measured, fp32 on the A100 slice) x 1.6 + 1 h for setup and saving
-    HOURS=$(awk -v e="$EP" 'BEGIN{h = e * 2.5 * 1.6 + 1; printf "%d", (h == int(h)) ? h : int(h) + 1}')
-    TRAIN=$(MODEL=pythia1b EPOCHS=$EP LR=$LR SEED=$SEED PRECISION=fp32 INFER=0 NO_EARLY_STOP=1 CKPTS=none RUN_STAMP=$STAMP \
-        sbatch --parsable --job-name="g-$NAME" --time="$HOURS:00:00" "$REPO/hpc/train.slurm")
-    INFER=$(RUN=$RUN SETS=test_t10 sbatch --parsable --job-name="i-$NAME" --time=04:00:00 \
-        --dependency=afterok:$TRAIN --kill-on-invalid-dep=yes "$REPO/hpc/infer_only.slurm")
-    printf '%s\t%s\t%s\t%s\n' "$NAME" "$RUN" "$TRAIN" "$INFER" | tee -a "$GRID/cells.tsv"
-    INF_JOBS+="${INF_JOBS:+:}$INFER"
+    # time: training 2.5 h per epoch (measured, fp32 on the A100 slice) x 1.6 + 1 h for setup and saving,
+    # + INFER_HOURS for the fp32 inference of the test set in the same job (the former separate job had 4 h)
+    HOURS=$(awk -v e="$EP" -v i="${INFER_HOURS:-4}" 'BEGIN{h = e * 2.5 * 1.6 + 1 + i; printf "%d", (h == int(h)) ? h : int(h) + 1}')
+    TRAIN=$(MODEL=pythia1b EPOCHS=$EP LR=$LR SEED=$SEED PRECISION=fp32 INFER=0 INFER_FP32=1 REPO=$REPO NO_EARLY_STOP=1 CKPTS=none \
+        RUN_STAMP=$STAMP sbatch --parsable --job-name="g-$NAME" --time="$HOURS:00:00" "$REPO/hpc/train.slurm")
+    # cells.tsv: name  run_folder  train_job  infer_job (the same job now)
+    printf '%s\t%s\t%s\t%s\n' "$NAME" "$RUN" "$TRAIN" "$TRAIN" | tee -a "$GRID/cells.tsv"
+    INF_JOBS+="${INF_JOBS:+:}$TRAIN"
 done
-# the analysis waits for all inferences of this call; if one of them fails, it is cancelled and the mail says so
+# the analysis waits for all jobs of this call; if one of them fails, it is cancelled and the mail says so
 sbatch --parsable --job-name=c2s-analyze --dependency=afterok:$INF_JOBS${AFTER:+:$AFTER} --kill-on-invalid-dep=yes \
     --export=ALL,REPO="$REPO" "$REPO/grid/analyze.slurm" | tee -a "$GRID/chain.log"

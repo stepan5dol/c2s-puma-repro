@@ -5,13 +5,19 @@ on:
   workflow_dispatch:
 
 jobs:
+  mock-grid:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: grid start with stub sbatch/apptainer (one job per cell, fp32 inference inside, failures not silent)
+        run: bash grid/tests/mock_grid.sh
   syntax:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - name: bash and python syntax
         run: |
-          bash -n hpc/train.slurm hpc/infer_only.slurm grid/submit_cells.sh grid/analyze.slurm grid/start.sh
+          bash -n hpc/train.slurm hpc/infer_only.slurm grid/submit_cells.sh grid/analyze.slurm grid/start.sh grid/tests/mock_grid.sh
           python3 -m py_compile scripts/*.py grid/lib/*.py grid/tools/*.py
           sed -n "/<<'EOF'$/,/^EOF$/p" hpc/train.slurm | sed '1d;$d' > /tmp/hf_sync.py
           python3 -m py_compile /tmp/hf_sync.py

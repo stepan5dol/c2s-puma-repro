@@ -16,6 +16,9 @@ set -euo pipefail
 MODEL=${MODEL:-pythia1b}
 INFER=${INFER:-0}
 INFER_TEMPS=${INFER_TEMPS:-1.0 0.8 1.2}
+# INFER_FP32=1 (the grid): after training, in this job, hpc/infer_only.slurm on the end-of-run model: test set, T 1.0,
+# vLLM in float32 -> $RUN/inference_float32/test_t10.jsonl. Needs NO_EARLY_STOP=1 and REPO (the repository folder).
+INFER_FP32=${INFER_FP32:-0}
 AZI_TEMP=${AZI_TEMP:-1.0}
 AZI_SETS="inference_azi inference_azi_concise inference_azi_ratmatch"
 AZI_SRC=https://huggingface.co/dolzhenkosv/c2s-gemma2-2b-azithro-transfer/resolve/be9e317b2791e2518308dfdc211342815ced72de
@@ -66,6 +69,12 @@ if [ -n "$SEED" ]; then
     SLUG+=-s$SEED
 fi
 CKPTS=${CKPTS:-hf}
+if [ "$INFER_FP32" = 1 ]; then
+    [ "$NO_EARLY_STOP" = 1 ] || { echo "INFER_FP32=1 needs NO_EARLY_STOP=1 (it infers the end-of-run model)" >&2; exit 1; }
+    [ "$INFER" = 0 ] || { echo "INFER_FP32=1 and INFER=1 together are not supported" >&2; exit 1; }
+    INFER_SCRIPT=${REPO:?INFER_FP32=1 needs REPO, the repository folder}/hpc/infer_only.slurm
+    [ -s "$INFER_SCRIPT" ] || { echo "no $INFER_SCRIPT" >&2; exit 1; }
+fi
 [[ $CKPTS =~ ^(hf|xdisk|none)$ ]] || { echo "CKPTS must be hf, xdisk or none" >&2; exit 1; }
 
 STAMP=${RUN_STAMP:-$(date +%Y-%m-%d_%H%M)}
@@ -306,7 +315,11 @@ finish() {
         echo "base_model_revision: ${BASE_REV:-}"
         echo "best_checkpoint: ${BEST}"
         echo "final_model_sha256: $(cat "$RUN/$OUTNAME"/model*.safetensors 2>/dev/null | sha256sum | cut -d' ' -f1)"
-        echo "inference: $INFER_STATUS (test at $INFER_TEMPS, azithromycin at $AZI_TEMP)"
+        if [ "$INFER_FP32" = 1 ]; then
+            echo "inference: $INFER_STATUS (fp32, test at T 1.0, inference_float32/, log infer_fp32.log)"
+        else
+            echo "inference: $INFER_STATUS (test at $INFER_TEMPS, azithromycin at $AZI_TEMP)"
+        fi
         echo "tg_monitor_sha256: $(sha256sum "$WORK/tg_monitor.py" 2>/dev/null | cut -d' ' -f1)"
         echo "slurm_log: $DATA/logs/c2s-sft_$SLURM_JOB_ID.out"
         echo
@@ -322,10 +335,13 @@ finish() {
         run_hf python /hf_sync.py final "${STAMP}_${SLUG}" "$OUTNAME" >> "$RUN/hf_sync.log" 2>&1 \
             || echo "final HF upload failed, see hf_sync.log" >> "$RUN/record.md"
     fi
-    MSG="$([ "$STATUS" = completed ] && echo '✅' || echo '❌') ${STAMP}_${SLUG}: $STATUS"
+    MSG="$([ "$STATUS" = completed ] && [ "$INFER_STATUS" != failed ] && echo '✅' || echo '❌') ${STAMP}_${SLUG}: $STATUS"
     MSG+=", $(( ($(date +%s) - T0) / 60 )) min, job $SLURM_JOB_ID"
     [ -n "$BEST" ] && MSG+=$'\n'"best: $BEST"
     [ "$INFER_STATUS" != off ] && MSG+=$'\n'"inference: $INFER_STATUS"
+    if [ "$STATUS" = completed ] && [ "$INFER_STATUS" = failed ]; then
+        MSG+=$'\n\n'"$(tail -n 15 "$RUN/infer_fp32.log" "$RUN"/inference*/*.log 2>/dev/null | tail -n 15)"
+    fi
     if [ "$STATUS" != completed ]; then
         MSG+=$'\n'"step $STEP, exit $RC, memory peak $(gib "$MEM_PEAK") GiB, oom_kill $(oom_kills)"
         LOG=$RUN/train.log
@@ -520,5 +536,15 @@ if [ "$INFER" = 1 ]; then
             > "$RUN/inference/$n.log" 2>&1 &
         PID=$!; wait $PID
     done
+    INFER_STATUS=completed
+fi
+
+if [ "$INFER_FP32" = 1 ]; then
+    INFER_STATUS=failed
+    step infer_fp32_test_t10
+    tg "🏁 ${STAMP}_${SLUG}: training done, fp32 inference of the test set at T 1.0"
+    RUN=$RUN SETS=test_t10 DTYPE=float32 MODEL_PATH=$WORK/mainwork/$OUTNAME bash "$INFER_SCRIPT" > "$RUN/infer_fp32.log" 2>&1 &
+    PID=$!; wait $PID
+    [ -s "$RUN/inference_float32/test_t10.jsonl" ] || { echo "no $RUN/inference_float32/test_t10.jsonl" >> "$RUN/infer_fp32.log"; exit 1; }
     INFER_STATUS=completed
 fi

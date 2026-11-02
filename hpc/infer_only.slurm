@@ -12,6 +12,8 @@
 # Inference only, on the final model of an existing training run (train.slurm of c2s-puma-repro),
 # with the image's own run_test.py / run_azi.py; the only change is the vLLM dtype.
 # usage: RUN=/xdisk/vkalin/dolzhenko/c2s/results/<run folder> [SETS="test_t10 ..."] [DTYPE=float32] sbatch infer_only.slurm
+# MODEL_PATH: the model folder (default $RUN/$OUTNAME); train.slurm with INFER_FP32=1 runs this script at the end of
+#       training, inside its own job, on the end-of-run model in its work folder.
 # ALLOW_UPCAST=1: a bf16-trained run (e.g. a reference) inferred in fp32 for a same-dtype comparison.
 # SETS (default: the full A100 set; the grid asks for SETS=test_t10 only): test_t08 test_t10 test_t12 (test set at T 0.8/1.0/1.2),
 #       inference_azi inference_azi_concise
@@ -28,9 +30,10 @@ SIF=$DATA/images/c2s-train.sif
 SRC=https://huggingface.co/dolzhenkosv/c2s-pythia-1b-azithro-transfer/resolve/040f129aafc483852e54a7ccf078f7cc1a2286f5
 AZI_SRC=https://huggingface.co/dolzhenkosv/c2s-gemma2-2b-azithro-transfer/resolve/be9e317b2791e2518308dfdc211342815ced72de
 OUT=$RUN/inference_$DTYPE
+MODEL_PATH=${MODEL_PATH:-$RUN/$OUTNAME}
 WORK=/tmp/c2s_infer_$SLURM_JOB_ID
 
-[ -f "$RUN/$OUTNAME/config.json" ] || { echo "no model in $RUN/$OUTNAME" >&2; exit 1; }
+[ -f "$MODEL_PATH/config.json" ] || { echo "no model in $MODEL_PATH" >&2; exit 1; }
 mkdir "$OUT"  # fails if it exists: never overwrite earlier outputs
 mkdir -p "$WORK"/{in/dataset,in/inference,code,hf,triton}
 trap 'rm -rf "$WORK"' EXIT
@@ -63,11 +66,15 @@ for p in run_test run_azi; do
     apptainer exec "$SIF" cat /opt/c2s/$p.py | diff - "$WORK/code/$p.py" > "$OUT/$p.diff" || true
 done
 cp "$0" "$OUT/infer_only.slurm"
-grep -E "status|num_epochs|best_checkpoint|final_model_sha256" "$RUN/record.md" > "$OUT/model.txt" || true
+if [ "$MODEL_PATH" = "$RUN/$OUTNAME" ]; then
+    grep -E "status|num_epochs|best_checkpoint|final_model_sha256" "$RUN/record.md" > "$OUT/model.txt" || true
+else
+    echo "model: $MODEL_PATH, end of run, inside training job ${SLURM_JOB_ID:-}" > "$OUT/model.txt"
+fi
 
 run_infer() {
     apptainer run --app infer --nv --cleanenv --no-home --writable-tmpfs \
-        --bind "$RUN/$OUTNAME:/model:ro" --bind "$WORK/in:/in:ro" --bind "$WORK/code:/code:ro" \
+        --bind "$MODEL_PATH:/model:ro" --bind "$WORK/in:/in:ro" --bind "$WORK/code:/code:ro" \
         --bind "$OUT:/out" --bind "$WORK/hf:/hf" --bind "$WORK/triton:/triton" \
         --env HF_HOME=/hf,TRITON_CACHE_DIR=/triton,VLLM_CACHE_ROOT=/triton/vllm,HOME=/tmp,PYTHONFAULTHANDLER=1,VLLM_NO_USAGE_STATS=1,MODEL_DIR=/model,"$1" \
         "$SIF" "${@:2}"

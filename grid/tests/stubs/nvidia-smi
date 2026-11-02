@@ -1,0 +1,2 @@
+#!/bin/bash
+echo "nvidia-smi stub: A100 MIG 3g.40gb"
