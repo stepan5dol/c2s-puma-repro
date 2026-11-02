@@ -36,8 +36,9 @@ for cell in "$@"; do
     STAMP=$(date +%Y-%m-%d_%H%M%S)
     RUN=$D/results/${STAMP}_puma-a100mig-repro-ep${EP}-fp32-lr${LR}-s${SEED}
     # time: training 2.5 h per epoch (measured, fp32 on the A100 slice) x 1.6 + 1 h for setup and saving,
-    # + INFER_HOURS for the fp32 inference of the test set in the same job (the former separate job had 4 h)
-    HOURS=$(awk -v e="$EP" -v i="${INFER_HOURS:-4}" 'BEGIN{h = e * 2.5 * 1.6 + 1 + i; printf "%d", (h == int(h)) ? h : int(h) + 1}')
+    # + INFER_HOURS for the fp32 inference of the test set in the same job: measured 1 h 28 min of generation for
+    # test_t10 on the A100 slice (run 2026-10-28_1152, job 24473264), plus loading -> 3 h
+    HOURS=$(awk -v e="$EP" -v i="${INFER_HOURS:-3}" 'BEGIN{h = e * 2.5 * 1.6 + 1 + i; printf "%d", (h == int(h)) ? h : int(h) + 1}')
     TRAIN=$(MODEL=pythia1b EPOCHS=$EP LR=$LR SEED=$SEED PRECISION=fp32 INFER=0 INFER_FP32=1 REPO=$REPO NO_EARLY_STOP=1 CKPTS=none \
         RUN_STAMP=$STAMP sbatch --parsable --job-name="g-$NAME" --time="$HOURS:00:00" "$REPO/hpc/train.slurm")
     # cells.tsv: name  run_folder  train_job  infer_job (the same job now)

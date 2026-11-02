@@ -38,7 +38,7 @@ for j in train:
     e = j["env"]
     assert (e["INFER_FP32"], e["INFER"], e["NO_EARLY_STOP"], e["PRECISION"], e["CKPTS"]) == ("1", "0", "1", "fp32", "none"), e
     assert e["REPO"] == "/xdisk/vkalin/dolzhenko/c2s/repo", e["REPO"]
-    assert j["opts"]["time"] == "13:00:00", j["opts"]["time"]           # 2 epochs: 2 x 2.5 x 1.6 + 1 + 4
+    assert j["opts"]["time"] == "12:00:00", j["opts"]["time"]           # 2 epochs: 2 x 2.5 x 1.6 + 1 + 3
 assert jobs[2]["opts"]["dependency"] == f"afterok:{train[0]['id']}:{train[1]['id']}", jobs[2]["opts"]["dependency"]
 PY
 echo "== cells.tsv"; cat "$D/grid/cells.tsv"
