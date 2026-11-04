@@ -55,7 +55,8 @@ make_grid() {
         printf '%s\t%s\t1\t1\n' "$c" "$r" >> "$G/cells.tsv"
     done
 }
-run() { REAL_DECIDE=$LIB/decide.py "$PY" -I "$T/bin/chain_step.py" --grid "$1" --repo /repo --max-cells "$2"; }
+# no -I: it drops the user site-packages, where pip puts numpy/scipy on the GitHub runner
+run() { REAL_DECIDE=$LIB/decide.py "$PY" "$T/bin/chain_step.py" --grid "$1" --repo /repo --max-cells "$2"; }
 
 echo "== FORCE_LR 1e-4, MAX_CELLS 0 (the real call)"
 make_grid "$T/g1"; echo 1e-4 > "$T/g1/FORCE_LR"
