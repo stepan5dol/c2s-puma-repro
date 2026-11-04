@@ -59,3 +59,13 @@ Watch it:  `squeue -u $USER`,  `tail -f /xdisk/vkalin/dolzhenko/c2s/grid/chain.l
    ```
    `MAX_CELLS=0`: the analysis after these cells compares 1e-4 at 1/2/4 epochs, writes the decision and stops; `STOPPED`
    says which cell the rule would train next. Tested by `grid/tests/force_lr.sh`.
+6. Telegram after an analysis: `grid/notify_tg.sh` sends a short message (job states, `STOPPED`, the last stage with
+   violins, eval_loss, reverse task, McNemar, energy, `NEXT`) and the full report as a file, also kept in `grid/reports/`.
+   Once: make a bot with @BotFather, write it any message, put the token in `~/c2s/c2s.env` without echoing it, check:
+   ```
+   read -rsp "token: " T && echo "TG_TOKEN=$T" >> ~/c2s/c2s.env && unset T && chmod 600 ~/c2s/c2s.env
+   bash /xdisk/vkalin/dolzhenko/c2s/repo/grid/notify_tg.sh --test
+   ```
+   Then per analysis job (afterany: also when it fails or is cancelled):
+   `sbatch --dependency=afterany:<analysis job> /xdisk/vkalin/dolzhenko/c2s/repo/grid/notify_tg.sh <analysis job>`.
+   Tested by `grid/tests/notify_tg_test.sh`.
