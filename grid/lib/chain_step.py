@@ -5,6 +5,9 @@ Reads the cells of the grid (cells.tsv), takes the finished ones, applies the ru
 hpc/submit_cells.sh logic (done here by calling `sbatch` through the host: this script only writes the commands to
 next_cells.txt; grid/analyze.slurm submits them after it returns, outside the container).
 
+grid/FORCE_LR, if present, holds one LR written by the author (e.g. 1e-4): stage B then runs at that LR instead of the
+stage A winner (decide.py). A file that does not hold exactly one LR stops the chain.
+
 The chain stops (and says why) when: a cell has no results, the rule says stop or finished, or MAX_CELLS cells were
 trained in total. Nothing is skipped silently: every stop writes grid/STOPPED with the reason, and the Slurm mail
 (--mail-type=END,FAIL) tells you the job ended.
@@ -36,6 +39,14 @@ def stop(why, code=0):
     log("STOP: " + why)
     sys.exit(code)
 
+
+force_lr = None
+if (G / "FORCE_LR").exists():
+    txt = (G / "FORCE_LR").read_text().strip()
+    if not re.fullmatch(r"[0-9]+(\.[0-9]+)?e-[0-9]+", txt):
+        stop(f"grid/FORCE_LR must hold one LR like 1e-4, it holds {txt!r}", code=1)
+    force_lr = float(txt)
+    log(f"FORCE_LR {txt}: stage B runs at this LR (set by the author in grid/FORCE_LR)")
 
 CELL = re.compile(r"lr([0-9.]+e-[0-9]+)_ep([0-9]+)_s([0-9]+)")
 cells, missing = {}, []
@@ -75,7 +86,7 @@ if missing:
 
 ref = json.load(open(G / "reference" / "identity_scores.json"))
 copy = decide.violin_mismatch(ref)
-state = dict(cells=cells, runs_dir=str(RUNS), decisions_dir=str(DEC), copy_threshold=copy)
+state = dict(cells=cells, runs_dir=str(RUNS), decisions_dir=str(DEC), copy_threshold=copy, force_lr=force_lr)
 lines = []
 tee = lambda s: (log(s), lines.append(s))
 step = decide.next_step(state, copy, tee)

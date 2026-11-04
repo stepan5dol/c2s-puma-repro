@@ -14,6 +14,8 @@ Stages:  A  learning rate at 2 epochs   (cells lr1e-5, lr3e-5 trained; lr1e-4 is
          B  epochs at the winning LR    (1 and 4 trained; 2 from stage A)
          C  two more seeds at the winner
 Edge:    winner at the first/last LR (or epochs) of the explored range -> one more cell beyond it, same rule.
+FORCE_LR: a file grid/FORCE_LR with one LR (e.g. 1e-4) makes stage B run at that LR instead of the stage A
+         winner; stage A is still evaluated and logged, its edge step is skipped. The LR needs a 2-epoch run.
 
 usage:  decide.py state.json            reads the finished runs listed there, prints and writes the next step
         decide.py --selftest            reproduces fp32 > ms264 > a100ep2 on the runs we already have
@@ -242,16 +244,30 @@ def next_step(state, copy_threshold, log):
                     why="stage A: the LR grid at 2 epochs is not complete")
     log("STAGE A  learning rate at 2 epochs")
     win, why = pick_best(stageA, runs, copy_threshold, log, tiebreak=loss_of)
-    if win is None:
+    # grid/FORCE_LR (chain_step.py puts it in state["force_lr"]): the author sets the LR of stage B instead of the
+    # stage A winner. Stage A is still evaluated and logged, so the decision shows what the rule would have chosen;
+    # the edge step of stage A is skipped.
+    force = state.get("force_lr")
+    if win is None and force is None:
         return dict(action="stop", why=why)
     log(f"  -> {win}: {why}")
-    lr_w = done[win]["lr"]
-    i = LR_GRID.index(lr_w)
+    if force is not None:
+        match = [lr for lr in lrs_done if lr_str(lr) == lr_str(force)]
+        if not match:
+            return dict(action="stop", why=f"FORCE_LR {lr_str(force)} has no 2-epoch run (seed 42); "
+                                          f"LRs trained at 2 epochs: {[lr_str(x) for x in lrs_done]}")
+        lr_w = match[0]
+        log(f"  LR set by the author (grid/FORCE_LR): {lr_str(lr_w)}; the rule chose "
+            f"{lr_str(done[win]['lr']) if win else 'nothing'}")
+    else:
+        lr_w = done[win]["lr"]
     nxt = None
-    if lr_w == lrs_done[0] and i > 0 and LR_GRID[i - 1] not in lrs_done:
-        nxt = LR_GRID[i - 1]
-    elif lr_w == lrs_done[-1] and i < len(LR_GRID) - 1 and LR_GRID[i + 1] not in lrs_done:
-        nxt = LR_GRID[i + 1]
+    if force is None:
+        i = LR_GRID.index(lr_w)
+        if lr_w == lrs_done[0] and i > 0 and LR_GRID[i - 1] not in lrs_done:
+            nxt = LR_GRID[i - 1]
+        elif lr_w == lrs_done[-1] and i < len(LR_GRID) - 1 and LR_GRID[i + 1] not in lrs_done:
+            nxt = LR_GRID[i + 1]
     if nxt is not None:
         return dict(action="train", cells=[dict(lr=nxt, ep=base_ep, seed=42)],
                     why=f"stage A+: the winner {lr_w:g} is at the edge of the explored LRs {lrs_done}; try {nxt:g}")
@@ -291,10 +307,10 @@ def selftest_walk():
     load_run = lambda d: dict(loss=0.0)
     log = lambda s: None
 
-    def state(cells, queued=()):
+    def state(cells, queued=(), force=None):
         c = {cell_name(*x): dict(lr=x[0], ep=x[1], seed=x[2], run="r", status="done") for x in cells}
         c.update({q: dict(lr=0, ep=0, seed=0, run="r", status="queued") for q in queued})
-        return dict(cells=c, runs_dir="x")
+        return dict(cells=c, runs_dir="x", force_lr=force)
 
     def winner(lr=None, ep=None):
         def f(names, runs, thr, lg, tiebreak):
@@ -307,10 +323,24 @@ def selftest_walk():
             return (pick[0], "scripted") if pick else (None, "scripted: no such run")
         return f
 
-    def step(cells, win=None, queued=()):
+    def two(lr_a, ep_b):
+        """stage A (all names at 2 epochs) -> the run at lr_a (None: nothing kept); stage B -> the run at ep_b epochs"""
+        def f(names, runs, thr, lg, tiebreak):
+            if all("_ep2_" in n for n in names) and len(names) > 1 and len({n.split("_")[0] for n in names}) > 1:
+                pick = [n for n in names if lr_a is not None and n.startswith(f"lr{lr_str(lr_a)}_")]
+            else:
+                pick = [n for n in names if f"_ep{ep_b:g}_" in n]
+            calls.append(sorted(names))
+            return (pick[0], "scripted") if pick else (None, "scripted: no such run")
+        return f
+
+    calls = []
+
+    def step(cells, win=None, queued=(), force=None):
         global pick_best
         pick_best = win or (lambda *a, **k: (None, "not called"))
-        r = next_step(state(cells, queued), 22, log)
+        calls.clear()
+        r = next_step(state(cells, queued, force), 22, log)
         return (r["action"], sorted((lr_str(c["lr"]), c["ep"], c["seed"]) for c in r["cells"])) if r["action"] == "train" else (r["action"], r.get("winner"))
 
     base = [(1e-4, 2, 42)]
@@ -335,6 +365,22 @@ def selftest_walk():
     check(step(A, queued=["lr3e-5_ep4_s42"]), ("wait", None))
     check(step(A, lambda *a, **k: (None, "all dropped")), ("stop", None))
     check(cell_name(1e-4, 2, 42), "lr1e-4_ep2_s42")
+    # FORCE_LR: the grid as on 2026-11-04 (stage A chose 3e-4, epochs 1/2/4 done there), author sets 1e-4
+    G = A + [(3e-4, 2, 42), (3e-4, 1, 42), (3e-4, 4, 42)]
+    check(step(G, two(3e-4, 4)), ("train", [("3e-4", 8, 42)]))                          # without FORCE_LR: the rule goes to 8
+    check(step(G, two(3e-4, 4), force=1e-4), ("train", [("1e-4", 1, 42), ("1e-4", 4, 42)]))  # forced: epochs 1, 4 at 1e-4
+    G2 = G + [(1e-4, 1, 42), (1e-4, 4, 42)]
+    check(step(G2, two(3e-4, 4), force=1e-4), ("train", [("1e-4", 8, 42)]))             # forced, 4 wins -> 8 at 1e-4
+    check(calls[-1], ["lr1e-4_ep1_s42", "lr1e-4_ep2_s42", "lr1e-4_ep4_s42"])            # stage B compared exactly these
+    check(step(G2, two(3e-4, 2), force=1e-4), ("train", [("1e-4", 2, 43), ("1e-4", 2, 44)]))  # forced, 2 wins -> seeds
+    check(step(G2, two(3e-4, 1), force=1e-4), ("train", [("1e-4", 1, 43), ("1e-4", 1, 44)]))  # forced, 1 wins -> seeds
+    check(step(G2, two(3e-4, 4)), ("train", [("3e-4", 8, 42)]))                         # without FORCE_LR the 1e-4 cells
+    check(calls[-1], ["lr3e-4_ep1_s42", "lr3e-4_ep2_s42", "lr3e-4_ep4_s42"])            # do not enter stage B
+    check(step(A, two(1e-4, 2), force=1e-4), ("train", [("1e-4", 1, 42), ("1e-4", 4, 42)]))  # forced: no edge step to 3e-4
+    check(step(G2, two(None, 4), force=1e-4), ("train", [("1e-4", 8, 42)]))             # stage A keeps nothing: forced goes on
+    check(step(G2, two(None, 4)), ("stop", None))                                       # ... without FORCE_LR it stops
+    check(step(G2, two(3e-4, 4), force=3e-6), ("stop", None))                           # forced LR without a 2-epoch run
+    check(step(G2, two(3e-4, 4), force=float("1e-4")), ("train", [("1e-4", 8, 42)]))   # parsed from the file text
     load_run, pick_best = keep
     print(f"walk selftest: {n} checks passed")
 

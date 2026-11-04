@@ -44,6 +44,10 @@ jobs:
           set -eux
           python3 -m pip install --quiet numpy scipy scikit-learn
           cd grid/lib && python3 decide.py --selftest-walk
+      - name: grid/FORCE_LR through chain_step.py (stage B at the author's LR, cap, bad file)
+        run: |
+          python3 -m pip install --quiet numpy scipy scikit-learn
+          bash grid/tests/force_lr.sh
       - name: train.slurm config edits (LR, SEED, EPOCHS, no early stopping)
         run: |
           set -eux

@@ -50,3 +50,12 @@ Watch it:  `squeue -u $USER`,  `tail -f /xdisk/vkalin/dolzhenko/c2s/grid/chain.l
 4. `grid/tests/mock_grid.sh` (run by the check workflow on every push) starts the grid with stubs for sbatch, apptainer and
    curl and runs the queued jobs: one job per cell, fp32 inference of the end-of-run model inside it, the analysis waiting
    for exactly those jobs, and a failed inference failing the job while the trained model is kept.
+5. `grid/FORCE_LR` (one line, e.g. `1e-4`) makes the next analysis run stage B at that LR instead of the stage A winner.
+   Stage A is still evaluated and logged ("LR set by the author ...; the rule chose ..."), its edge step is skipped, and the
+   LR needs a 2-epoch run. A file with anything else stops the chain. To change course by hand, e.g. epochs at 1e-4 only:
+   ```
+   echo 1e-4 > /xdisk/vkalin/dolzhenko/c2s/grid/FORCE_LR
+   MAX_CELLS=0 bash /xdisk/vkalin/dolzhenko/c2s/repo/grid/submit_cells.sh 1e-4:1:42 1e-4:4:42
+   ```
+   `MAX_CELLS=0`: the analysis after these cells compares 1e-4 at 1/2/4 epochs, writes the decision and stops; `STOPPED`
+   says which cell the rule would train next. Tested by `grid/tests/force_lr.sh`.
