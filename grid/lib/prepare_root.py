@@ -41,6 +41,10 @@ for rel, target in LINKS.items():
     link = dst / rel
     link.parent.mkdir(parents=True, exist_ok=True)
     link.symlink_to(target)
+if (data / "sft_example_registry.csv").exists():
+    reg_link = dst / "retrain_prompt/pipeline/sft_example_registry.csv"
+    reg_link.parent.mkdir(parents=True, exist_ok=True)
+    reg_link.symlink_to(data / "sft_example_registry.csv")
 # output folders the violin scripts write into
 H = dst / "retrain_v2/analysis/real_counts_suite_ortho"
 for d in ("human_panel_variants/figures", "human_panel_variants/reports", "rat_panel_variants/figures", "rat_panel_variants/reports"):

@@ -221,7 +221,8 @@ def run(gate, df, real_by_bc, pred_by_idx, model, ct_map):
             violins[ct][("model", s)] = mm[s][~np.isnan(mm[s])]
 
     if not violins:
-        raise SystemExit(f"no cell type usable for gate={gate}")
+        print(f"  WARN: no cell type usable for gate={gate} -- skipping plot")
+        return
     if ONLY_CT is None:
         violins["POOLED"] = {k: np.concatenate([violins[ct][k] for ct in violins]) for k in X_POS}
 
@@ -266,7 +267,11 @@ def main():
               "aerocyte capillary endothelial cell (endothelial)": "aCap",
               "pericyte (mural)": "Pericyte",
               "vascular endothelial cell (endothelial)": "VEC",
-              "pulmonary venous endothelial cell (endothelial)": "VEC"}
+              "pulmonary venous endothelial cell (endothelial)": "VEC",
+              "gCap": "gCap",
+              "aCap": "aCap",
+              "Pericyte": "Pericyte",
+              "Pulmonary venous EC": "VEC"}
     df["ct"] = df["cell_type"].map(ct_map)
     unmapped = sorted(df.loc[df["ct"].isna(), "cell_type"].unique())
     assert not unmapped, f"unmapped cell types: {unmapped}"

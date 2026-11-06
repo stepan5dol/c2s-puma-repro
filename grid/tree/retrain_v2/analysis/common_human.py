@@ -60,6 +60,7 @@ CT_MAP = {
     "aerocyte capillary endothelial cell": "aCap",
     "pericyte":                            "Pericyte",
     "pulmonary venous endothelial cell":   "VEC",
+    "vascular endothelial cell":           "VEC",
 }
 COND_ORDER = ["Acute", "BPD", "BPD-PH"]
 
@@ -135,7 +136,7 @@ def load_azi_counterfactual(jsonl_path: Path = AZI_RESULTS_PATH) -> dict[tuple[s
     with open(jsonl_path) as f:
         for line in f:
             r = json.loads(line)
-            if r.get("direction") != "fwd":
+            if r.get("direction", "fwd") != "fwd":
                 continue
             prompt = r["prompt"]
             species = _PROMPT_RE["species"].search(prompt).group(1).strip()
@@ -149,8 +150,10 @@ def load_azi_counterfactual(jsonl_path: Path = AZI_RESULTS_PATH) -> dict[tuple[s
             cond = condition_of_age(age)
             if cond is None:
                 continue
-            unexposed = _PROMPT_RE["unexposed"].search(prompt).group(1).strip().split()[:K]
-            pred = dedupe_first(r["pred"].strip().split())[:K]
+            m_unexp = _PROMPT_RE["unexposed"].search(prompt)
+            unexposed = m_unexp.group(1).strip().split()[:K] if m_unexp else []
+            raw_pred = r.get("pred") or r.get("predicted_azi") or r.get("predicted") or ""
+            pred = dedupe_first(raw_pred.strip().split())[:K]
             groups[(ct, cond)].append({"unexposed": unexposed, "pred": pred})
     return groups
 
@@ -175,7 +178,8 @@ def load_cells(jsonl_path: Path) -> dict[tuple[str, str], list[dict]]:
             cond = condition_of(pert)
             if cond is None:
                 continue
-            unexposed = _PROMPT_RE["unexposed"].search(prompt).group(1).strip().split()[:K]
+            m_unexp = _PROMPT_RE["unexposed"].search(prompt)
+            unexposed = m_unexp.group(1).strip().split()[:K] if m_unexp else []
             gt = r["gt"].strip().split()[:K]
             pred = dedupe_first(r["pred"].strip().split())[:K]
             groups[(ct, cond)].append({"unexposed": unexposed, "gt": gt, "pred": pred})

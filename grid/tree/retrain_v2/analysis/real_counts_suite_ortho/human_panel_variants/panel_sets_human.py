@@ -44,7 +44,7 @@ CONDITIONS = ("Acute26", "BPD7mo", "BPDPH7mo")
 CONDITION = "BPD7mo"
 CT_ORDER = ["gCap", "aCap", "Pericyte", "VEC"]
 
-GATES = ("full_list", "gated")
+GATES = ("full_list",)
 RECOVERY_TYPES = ("Rescued_HO_down", "Rescued_HO_up")
 
 GATE_DESC = {

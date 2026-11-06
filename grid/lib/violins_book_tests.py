@@ -31,8 +31,7 @@ from scipy.stats import anderson, binomtest, mannwhitneyu, skew, t as tdist, tte
 
 ALPHA, FAMILY = 0.05, 8
 ARMS = [("rat|ho", "rat RA->HO"), ("rat|azi", "rat HO->AZI"), ("human|He22->Acute26", "human He22->Acute26"),
-        ("human|Term->BPDPH7mo", "human Term->BPD-PH"), ("human|Term->BPD7mo", "human Term->BPD"),
-        ("human|Acute26->BPD7mo", "human Acute26->BPD (pairs, dge_filtered)")]
+        ("human|Term->BPDPH7mo", "human Term->BPD-PH"), ("human|Term->BPD7mo", "human Term->BPD")]
 CT_SHORT = {"General": "gCap", "Aerocyte": "aCap", "Pericyte": "Pericyte", "Vascular": "VEC", "Pulmonary": "VEC"}
 
 

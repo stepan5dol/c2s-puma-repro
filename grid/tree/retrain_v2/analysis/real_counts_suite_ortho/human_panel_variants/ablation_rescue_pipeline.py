@@ -91,6 +91,40 @@ RECOVERY_RATIO_THRESHOLD = 0.9
 
 CONDITIONS = {"Acute26": "Acute", "BPD7mo": "BPD", "BPDPH7mo": "BPD-PH"}
 MIN_AZI_CELLS = 3
+_DISEASE_CACHE: dict | None = None
+
+
+def write_rat_schema_workbooks(out: pd.DataFrame, rat_schema_dir: Path | None = None) -> list[Path]:
+    """Write human_{cond}_{ct}_rescue_predicted_azi.xlsx files in rat_schema format."""
+    target_dir = rat_schema_dir or (HERE / "reports" / "rat_schema")
+    target_dir.mkdir(parents=True, exist_ok=True)
+    written: list[Path] = []
+    for cond_csv in CONDITIONS:
+        for ct in CH.CT_ORDER:
+            if len(out):
+                sub = out[(out["condition"] == cond_csv) & (out["cell_type"] == ct) & out["rescued"]].copy()
+            else:
+                sub = pd.DataFrame()
+            if len(sub):
+                wb_df = pd.DataFrame({
+                    "gene": sub["gene"].values,
+                    "avg_log2FC_HO": sub["avg_log2FC_disease_top800"].values,
+                    "p_val_adj_HO": sub["p_val_adj_disease_top800"].values,
+                    "avg_log2FC_AZI": sub["avg_log2FC_azi_top800"].values,
+                    "p_val_adj_AZI": sub["p_val_adj_azi_top800"].values,
+                    "recovery_ratio": sub["recovery_ratio"].values,
+                    "recovery_type": sub["recovery_type"].values,
+                })
+            else:
+                wb_df = pd.DataFrame(columns=[
+                    "gene", "avg_log2FC_HO", "p_val_adj_HO",
+                    "avg_log2FC_AZI", "p_val_adj_AZI",
+                    "recovery_ratio", "recovery_type",
+                ])
+            xlsx_path = target_dir / f"human_{cond_csv}_{ct}_rescue_predicted_azi.xlsx"
+            wb_df.to_excel(xlsx_path, index=False)
+            written.append(xlsx_path)
+    return written
 
 
 def seurat_log2fc(x1: np.ndarray, x2: np.ndarray) -> np.ndarray:
@@ -111,7 +145,10 @@ def mwu_padj(x1: np.ndarray, x2: np.ndarray, n_genes_total: int) -> np.ndarray:
     return np.minimum(p * n_genes_total, 1.0)
 
 
-def main():
+def _get_disease_cache():
+    global _DISEASE_CACHE
+    if _DISEASE_CACHE is not None and _DISEASE_CACHE.get("k") == CR.K:
+        return _DISEASE_CACHE
     print("[calibration] fitting rank->expr model on GSE275938 compiled counts (all human conditions)...")
     model = rem.fit_from_csv(CH.COUNTS_CSV)
     n_genes_total = len(model.gene_names)
@@ -121,16 +158,11 @@ def main():
     term_mats = RC.real_term_matrices(model)
     term_top800 = {ct: CR.truncate_topk(X) for ct, X in term_mats.items()}
 
-    azi_groups_of = {}
-    for v in VARIANTS:
-        print(f"[data] model AZI-counterfactual, variant {v}...")
-        azi_groups_of[v] = CH.load_azi_counterfactual(AZI_JSONL_OF[v])
-
-    rows_of = {v: [] for v in VARIANTS}
-    for cond_csv, cond_model in CONDITIONS.items():
+    by_cond = {}
+    for cond_csv in CONDITIONS:
         print(f"\n[data] real {cond_csv} disease counts...")
         disease_mats = RC.real_disease_matrices(cond_csv, model)
-
+        by_ct = {}
         for ct in CH.CT_ORDER:
             if ct not in disease_mats or ct not in term_mats:
                 continue
@@ -138,10 +170,45 @@ def main():
             dis_full = disease_mats[ct]
             ctrl_t8 = term_top800[ct]
             dis_t8 = CR.truncate_topk(dis_full)
-            lfc_dis_t8_shared = seurat_log2fc(dis_t8, ctrl_t8)
-            padj_dis_t8_shared = mwu_padj(dis_t8, ctrl_t8, n_genes_total)
-            lfc_dis_full_shared = seurat_log2fc(dis_full, ctrl_full)
-            padj_dis_full_shared = mwu_padj(dis_full, ctrl_full, n_genes_total)
+            by_ct[ct] = (
+                ctrl_full,
+                dis_full,
+                ctrl_t8,
+                seurat_log2fc(dis_t8, ctrl_t8),
+                mwu_padj(dis_t8, ctrl_t8, n_genes_total),
+                seurat_log2fc(dis_full, ctrl_full),
+                mwu_padj(dis_full, ctrl_full, n_genes_total),
+            )
+        by_cond[cond_csv] = by_ct
+
+    _DISEASE_CACHE = {
+        "k": CR.K,
+        "model": model,
+        "n_genes_total": n_genes_total,
+        "by_cond": by_cond,
+    }
+    return _DISEASE_CACHE
+
+
+def main():
+    cache = _get_disease_cache()
+    model = cache["model"]
+    n_genes_total = cache["n_genes_total"]
+
+    azi_groups_of = {}
+    for v in VARIANTS:
+        print(f"[data] model AZI-counterfactual, variant {v}...")
+        azi_groups_of[v] = CH.load_azi_counterfactual(AZI_JSONL_OF[v])
+
+    rows_of = {v: [] for v in VARIANTS}
+    for cond_csv, cond_model in CONDITIONS.items():
+        by_ct = cache["by_cond"].get(cond_csv, {})
+        for ct in CH.CT_ORDER:
+            if ct not in by_ct:
+                continue
+            (ctrl_full, dis_full, ctrl_t8,
+             lfc_dis_t8_shared, padj_dis_t8_shared,
+             lfc_dis_full_shared, padj_dis_full_shared) = by_ct[ct]
 
             for variant in VARIANTS:
                 arecs = azi_groups_of[variant].get((ct, cond_model), [])
@@ -154,19 +221,23 @@ def main():
                          lfc_dis_full_shared, padj_dis_full_shared, variant)
 
     for variant in VARIANTS:
-        out = pd.concat(rows_of[variant], ignore_index=True)
+        out = pd.concat(rows_of[variant], ignore_index=True) if rows_of[variant] else pd.DataFrame()
         out_path = HERE / "reports" / f"ablation_rescue_genomewide_{variant}.csv"
         out.to_csv(out_path, index=False)
         print(f"\n-> {out_path}  ({len(out)} rows)")
-        print(f"=== rescued genes per condition/cell type, variant {variant} "
-              f"(rat's gate: both candidates + recovery_ratio<0.9) ===")
-        summary = (out[out["rescued"]]
-                   .groupby(["condition", "cell_type", "recovery_type"])
-                   .size().rename("n_genes").reset_index())
-        print(summary.to_string(index=False))
+        if len(out):
+            print(f"=== rescued genes per condition/cell type, variant {variant} "
+                  f"(rat's gate: both candidates + recovery_ratio<0.9) ===")
+            summary = (out[out["rescued"]]
+                       .groupby(["condition", "cell_type", "recovery_type"])
+                       .size().rename("n_genes").reset_index())
+            print(summary.to_string(index=False))
+        else:
+            summary = pd.DataFrame(columns=["condition", "cell_type", "recovery_type", "n_genes"])
         summary_path = HERE / "reports" / f"ablation_rescue_genomewide_summary_{variant}.csv"
         summary.to_csv(summary_path, index=False)
         print(f"-> {summary_path}")
+        write_rat_schema_workbooks(out)
 
 
 def _run_one(rows, model, n_genes_total, cond_csv, ct, ctrl_full, dis_full, ctrl_t8, azi_X,

@@ -44,15 +44,14 @@ ALPHA = 0.05
 LR_GRID = [3e-6, 1e-5, 3e-5, 1e-4, 3e-4]
 EP_GRID = [1, 2, 4, 8]
 ARMS = [("rat|ho", "rat RA->HO"), ("rat|azi", "rat HO->AZI"), ("human|He22->Acute26", "human He22->Acute26"),
-        ("human|Term->BPDPH7mo", "human Term->BPD-PH"), ("human|Term->BPD7mo", "human Term->BPD"),
-        ("human|Acute26->BPD7mo", "human Acute26->BPD, pairs (dge_filtered)")]
+        ("human|Term->BPDPH7mo", "human Term->BPD-PH"), ("human|Term->BPD7mo", "human Term->BPD")]
 CT_SHORT = {"General": "gCap", "Aerocyte": "aCap", "Pericyte": "Pericyte", "Vascular": "VEC", "Pulmonary": "VEC"}
+CTS = ("gCap", "aCap", "Pericyte", "VEC")
+STRATA = [(aname, ct, grp) for _, aname in ARMS for ct in CTS for grp in ("down", "up")]
 
 
 # ---------------------------------------------------------------- measures (from the existing scripts)
-def violin_mismatch(scores):
-    """Manuscript violins, Mann-Whitney as in the manuscript: sum over 6 arms x 2 groups of
-    |cell types (of 4) with the expected shift, model - real|. 0 = as the real cells, 48 = worst."""
+def _eval_scores(scores):
     import io
     import contextlib
     import tempfile
@@ -62,11 +61,31 @@ def violin_mismatch(scores):
     with contextlib.redirect_stdout(io.StringIO()):
         import book_compare as BC  # noqa: E402  (its module-level print runs once on a dummy pair)
     sys.argv = argv
-    rows = BC.evaluate(scores)
+    return BC.evaluate(scores)
+
+
+def violin_mismatch(scores):
+    """Manuscript violins, Mann-Whitney as in the manuscript: sum over 5 arms x 2 groups of
+    |cell types (of 4) with the expected shift, model - real|. Missing cell types (e.g. <3 rescued
+    genes) count as failed model strata (+1 mismatch)."""
+    rows = _eval_scores(scores)
     cnt = defaultdict(int)
-    for (arm, ct, grp, side), x in rows.items():
-        cnt[(arm, grp, side)] += int(x["violin"])
-    return sum(abs(cnt[(a, g, "model")] - cnt[(a, g, "real")]) for _, a in BC.ARMS for g in ("down", "up"))
+    for _, a in ARMS:
+        for ct in CTS:
+            for g in ("down", "up"):
+                if (a, ct, g, "real") in rows:
+                    cnt[(a, g, "real")] += int(rows[(a, ct, g, "real")]["violin"])
+                    cnt[(a, g, "model")] += int(rows[(a, ct, g, "model")]["violin"])
+                else:
+                    cnt[(a, g, "real")] += 1
+    return sum(abs(cnt[(a, g, "model")] - cnt[(a, g, "real")]) for _, a in ARMS for g in ("down", "up"))
+
+
+def violin_strata_ok(scores):
+    """40-element boolean list across STRATA (5 arms x 4 cell types x 2 directions): True iff
+    the model side achieves Mann-Whitney p < 0.05 in the expected direction."""
+    rows = _eval_scores(scores)
+    return [bool(rows.get((a, ct, g, "model"), {}).get("violin", False)) for a, ct, g in STRATA]
 
 
 def field(text, name):
@@ -82,7 +101,9 @@ def reverse_right(path):
         if r["direction"] != "rev":
             continue
         sp = "Rattus" if "Rattus" in r["prompt"].split("\n\n")[0] else "Homo"
-        out[r["idx"]] = (sp, cond_of(sp, field(r["gt"], "Condition")) == cond_of(sp, field(r["pred"], "Condition")))
+        gt_c = cond_of(sp, field(r["gt"], "Condition"))
+        pred_c = cond_of(sp, field(r["pred"], "Condition"))
+        out[r["idx"]] = (sp, gt_c is not None and gt_c == pred_c)
     return out
 
 
@@ -98,7 +119,11 @@ def energy_groups(path, use_input=False):
         cond = cond_of(sp, RE["pert"].search(p).group(1).strip())
         if ct is None or cond is None:
             continue
-        pred = RE["unexp"].search(p).group(1).strip().split()[:K] if use_input else dedupe(r["pred"].strip().split())[:K]
+        if use_input:
+            m_un = RE["unexp"].search(p)
+            pred = m_un.group(1).strip().split()[:K] if m_un else []
+        else:
+            pred = dedupe(r["pred"].strip().split())[:K]
         g[(sp, ct, cond)].append(dict(gt=r["gt"].strip().split()[:K], pred=pred))
     return g
 
@@ -163,41 +188,51 @@ def mcnemar(a, b):
 
 
 def pick_best(names, runs, copy_threshold, log, tiebreak):
-    """Steps 1-3 among the named finished runs; tiebreak(name) is the sort key used when the reverse task cannot
-    separate the leader from other runs (stage A: lower eval_loss; stage B: fewer epochs). Returns (winner, why)."""
+    """Steps 1-3 among the named finished runs:
+      Step 1  drop a run if its 5-arm full_list violin mismatch does not beat the copy threshold.
+      Step 2  rank kept runs by forward violin quality across the 40 full_list strata (lowest mismatch,
+              highest passed strata, McNemar across the 40 strata); tiebreak(name) breaks ties
+              (stage A: lower eval_loss; stage B: fewer epochs). Reverse task accuracy is logged descriptively.
+      Step 3  energy distance guard against every other kept run.
+    Returns (winner, why)."""
     for n in names:
         r = runs[n]
         r["mismatch"] = violin_mismatch(r["scores"])
+        r["strata_ok"] = violin_strata_ok(r["scores"])
+        r["n_violins"] = int(sum(r["strata_ok"]))
         r["rev"] = reverse_right(r["test"])
         r["human_ok"] = {i: ok for i, (sp, ok) in r["rev"].items() if sp == "Homo"}
     kept = [n for n in names if runs[n]["mismatch"] < copy_threshold]
     for n in names:
-        log(f"  {n:22s} violins mismatch {runs[n]['mismatch']:2d} (copy of input {copy_threshold:.0f})  "
-            f"eval_loss {runs[n]['loss']:.4f}  {'kept' if n in kept else 'DROPPED (not better than the copy of the input)'}")
+        log(f"  {n:22s} violins {runs[n]['n_violins']:2d}/{len(STRATA)} (mismatch {runs[n]['mismatch']:2d}, "
+            f"copy {copy_threshold:.0f})  eval_loss {runs[n]['loss']:.4f}  "
+            f"{'kept' if n in kept else 'DROPPED (not better than the copy of the input)'}")
     if not kept:
         return None, "all runs dropped by step 1"
     if len(kept) == 1:
         return kept[0], "only run left after step 1"
     ids = sorted(runs[kept[0]]["human_ok"])
     assert all(sorted(runs[n]["human_ok"]) == ids for n in kept), "the runs answered different test records"
-    acc = {n: float(np.mean([runs[n]["human_ok"][i] for i in ids])) for n in kept}
+    acc = {n: float(np.mean([runs[n]["human_ok"][i] for i in ids])) if ids else float("nan") for n in kept}
     for n in kept:
-        log(f"  {n:22s} reverse task, human: {100 * acc[n]:.1f}%")
+        log(f"  {n:22s} forward violins: {runs[n]['n_violins']}/{len(STRATA)} (mismatch {runs[n]['mismatch']})  "
+            f"reverse task, human: {100 * acc[n]:.1f}%")
     while True:
-        order = sorted(kept, key=lambda n: -acc[n])
+        order = sorted(kept, key=lambda n: (runs[n]["mismatch"], -runs[n]["n_violins"], tiebreak(n)))
         lead = order[0]
         tied = [lead]
         for n in order[1:]:
-            n10, n01, p = mcnemar([runs[n]["human_ok"][i] for i in ids], [runs[lead]["human_ok"][i] for i in ids])
+            n10, n01, p = mcnemar(runs[n]["strata_ok"], runs[lead]["strata_ok"])
             pb = min(1.0, p * (len(kept) - 1))
-            log(f"  {lead} vs {n}: only {lead} right {n10}, only {n} right {n01}, McNemar p_bonf {pb:.2g}")
-            if pb >= ALPHA:
+            log(f"  {lead} vs {n} (40 violin strata): only {lead} ok {n10}, only {n} ok {n01}, McNemar p_bonf {pb:.2g}")
+            if pb >= ALPHA and runs[n]["mismatch"] == runs[lead]["mismatch"] and runs[n]["n_violins"] == runs[lead]["n_violins"]:
                 tied.append(n)
         if len(tied) == 1:
-            cand, why = lead, "reverse task: significantly better than every other run"
+            cand = lead
+            why = f"forward violins: {runs[cand]['n_violins']}/{len(STRATA)} (mismatch {runs[cand]['mismatch']})"
         else:
             cand = min(tied, key=tiebreak)
-            why = f"reverse task cannot separate {tied}; tie-break"
+            why = f"forward violins tied on {tied} ({runs[cand]['n_violins']}/{len(STRATA)}, mismatch {runs[cand]['mismatch']}); tie-break"
         guard = None
         for n in kept:
             if n == cand:

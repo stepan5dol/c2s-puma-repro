@@ -367,19 +367,43 @@ fi
 step download_inputs
 FILES="$CFG dataset/train_segments.jsonl dataset/valid_segments.jsonl"
 [ "$INFER" = 1 ] && FILES+=" dataset/test_segments.jsonl"
-curl -fsSL -H @"$HF_AUTH" "$SRC/$INPUTS" -o "$RUN/inputs_sha256_source.txt"
-for f in $FILES; do
-    curl -fsSL -H @"$HF_AUTH" "$SRC/$f" -o "$WORK/mainwork/$f"
-    grep -E "^[0-9a-f]{64}  $f\$" "$RUN/inputs_sha256_source.txt" >> "$RUN/inputs_sha256.txt"
-done
-[ "$(wc -l < "$RUN/inputs_sha256.txt")" -eq "$(echo $FILES | wc -w)" ]
-if [ "$INFER" = 1 ]; then
-    mkdir -p "$WORK/mainwork/inference"
-    curl -fsSL -H @"$HF_AUTH" "$AZI_SRC/inference/sha256.txt" -o "$RUN/inference_inputs_source.txt"
-    for n in $AZI_SETS; do
-        curl -fsSL -H @"$HF_AUTH" "$AZI_SRC/inference/$n.jsonl" -o "$WORK/mainwork/inference/$n.jsonl"
-        grep -E "^[0-9a-f]{64}  inference/$n.jsonl\$" "$RUN/inference_inputs_source.txt" >> "$RUN/inputs_sha256.txt"
+# data_src/dataset or data_src/inference on xdisk = the local dataset is meant; without its checksum list the job stops
+# instead of training on the Hugging Face inputs (2026-11-05: the list was missing, the grid trained on the old dataset)
+if [ -d "$DATA/data_src/dataset" ] || [ -d "$DATA/data_src/inference" ]; then
+    [ -s "$DATA/data_src/inputs_sha256.txt" ] \
+        || { echo "$DATA/data_src/dataset exists but $DATA/data_src/inputs_sha256.txt does not: not falling back to Hugging Face (run push.sh)" >&2; exit 1; }
+fi
+if [ -s "$DATA/data_src/inputs_sha256.txt" ]; then
+    echo "data_src $DATA/data_src" > "$RUN/inputs_source.txt"
+    cp "$DATA/data_src/inputs_sha256.txt" "$RUN/inputs_sha256_source.txt"
+    for f in $FILES; do
+        cp "$DATA/data_src/$f" "$WORK/mainwork/$f"
+        grep -E "^[0-9a-f]{64}  $f\$" "$RUN/inputs_sha256_source.txt" >> "$RUN/inputs_sha256.txt"
     done
+    [ "$(wc -l < "$RUN/inputs_sha256.txt")" -eq "$(echo $FILES | wc -w)" ]
+    if [ "$INFER" = 1 ]; then
+        mkdir -p "$WORK/mainwork/inference"
+        for n in $AZI_SETS; do
+            cp "$DATA/data_src/inference/$n.jsonl" "$WORK/mainwork/inference/$n.jsonl"
+            grep -E "^[0-9a-f]{64}  inference/$n.jsonl\$" "$RUN/inputs_sha256_source.txt" >> "$RUN/inputs_sha256.txt"
+        done
+    fi
+else
+    echo "huggingface $SRC" > "$RUN/inputs_source.txt"
+    curl -fsSL -H @"$HF_AUTH" "$SRC/$INPUTS" -o "$RUN/inputs_sha256_source.txt"
+    for f in $FILES; do
+        curl -fsSL -H @"$HF_AUTH" "$SRC/$f" -o "$WORK/mainwork/$f"
+        grep -E "^[0-9a-f]{64}  $f\$" "$RUN/inputs_sha256_source.txt" >> "$RUN/inputs_sha256.txt"
+    done
+    [ "$(wc -l < "$RUN/inputs_sha256.txt")" -eq "$(echo $FILES | wc -w)" ]
+    if [ "$INFER" = 1 ]; then
+        mkdir -p "$WORK/mainwork/inference"
+        curl -fsSL -H @"$HF_AUTH" "$AZI_SRC/inference/sha256.txt" -o "$RUN/inference_inputs_source.txt"
+        for n in $AZI_SETS; do
+            curl -fsSL -H @"$HF_AUTH" "$AZI_SRC/inference/$n.jsonl" -o "$WORK/mainwork/inference/$n.jsonl"
+            grep -E "^[0-9a-f]{64}  inference/$n.jsonl\$" "$RUN/inference_inputs_source.txt" >> "$RUN/inputs_sha256.txt"
+        done
+    fi
 fi
 (cd "$WORK/mainwork" && sha256sum -c "$RUN/inputs_sha256.txt")
 cp "$WORK/mainwork/$CFG" "$RUN/"
@@ -542,9 +566,10 @@ fi
 if [ "$INFER_FP32" = 1 ]; then
     INFER_STATUS=failed
     step infer_fp32_test_t10
-    tg "🏁 ${STAMP}_${SLUG}: training done, fp32 inference of the test set at T 1.0"
-    RUN=$RUN SETS=test_t10 DTYPE=float32 MODEL_PATH=$WORK/mainwork/$OUTNAME bash "$INFER_SCRIPT" > "$RUN/infer_fp32.log" 2>&1 &
+    tg "🏁 ${STAMP}_${SLUG}: training done, fp32 inference of the test set and AZI at T 1.0"
+    RUN=$RUN SETS="${INFER_FP32_SETS:-test_t10 inference_azi}" DTYPE=float32 MODEL_PATH=$WORK/mainwork/$OUTNAME bash "$INFER_SCRIPT" > "$RUN/infer_fp32.log" 2>&1 &
     PID=$!; wait $PID
     [ -s "$RUN/inference_float32/test_t10.jsonl" ] || { echo "no $RUN/inference_float32/test_t10.jsonl" >> "$RUN/infer_fp32.log"; exit 1; }
+    [ -s "$RUN/inference_float32/inference_azi_results.jsonl" ] || { echo "no $RUN/inference_float32/inference_azi_results.jsonl" >> "$RUN/infer_fp32.log"; exit 1; }
     INFER_STATUS=completed
 fi

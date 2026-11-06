@@ -27,7 +27,7 @@ RESCUED_HUMAN_PATH = BASE / "train-after-grpo-analysis/rescued_human_genes.txt"
 CONFIG_PATH  = BASE / "scripts/cell_types_config.json"
 PIPELINE_DIR = BASE / "pipeline_short"
 
-TOP_K       = 800
+TOP_K       = 1600
 RANDOM_SEED = 42
 
 TARGET_RAT_CELL_TYPES: set[str] = {"gCAP", "aCAP", "Peri", "VEC"}
@@ -35,7 +35,7 @@ TARGET_HUMAN_CELL_TYPES: set[str] = {
     "gCap", "aCap", "Pulmonary venous EC", "Pericyte",
 }
 TARGET_RAT_CONDITIONS: set[str] = {"RA", "HO", "AZI"}
-TARGET_HUMAN_CONDITIONS: set[str] = {"He22", "Acute26", "BPD7mo", "BPDPH7mo"}
+TARGET_HUMAN_CONDITIONS: set[str] = {"He22", "Term0d", "Term20d", "Acute26", "BPD7mo", "BPDPH7mo"}
 
 GENE_ALIASES: dict[str, list[str]] = {
     "H1-0":      ["H1F0"],

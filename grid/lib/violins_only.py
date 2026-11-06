@@ -28,21 +28,36 @@ OUT = Path(os.environ["C2S_WORK"]) / "runs"
 RUNS = {k: Path(v) for k, v in json.load(open(sys.argv[1])).items()}  # {name: test_t10.jsonl}
 
 DIRS = [ORTHO / "rat_panel_variants", ORTHO / "human_panel_variants"]
-PATTERNS = {"figures": ("rat_delta_*", "human_delta_*"), "reports": ("report_rat_delta_*", "report_human_delta_*")}
+PATTERNS = {
+    "figures": ("rat_delta_*", "human_delta_*"),
+    "reports": (
+        "report_rat_delta_*",
+        "report_human_delta_*",
+        "ablation_rescue_genomewide_*.csv",
+        "rat_schema/human_*_rescue_predicted_azi.xlsx",
+    ),
+}
 _read_csv = pd.read_csv
 
 # ---- 1. AZI arm: the sweep script unchanged (its scan is the one read of the counts CSV) ----
 g = {"__name__": "sweep", "__file__": str(str(Path(__file__).with_name("scan_only.py")))}
 exec(compile(open(g["__file__"]).read(), g["__file__"], "exec"), g)
 L = g["L"]
+ARP = g["ARP"]
 s = g["_scan_once"]()
 CSV = Path(L.C.BPD_COUNTS_PATH).resolve()
 HEADER = _read_csv(CSV, index_col="id", nrows=0).columns
 BC = list(s["bc"])
 
-pairs = pd.read_csv(ORTHO / "human_panel_variants/recovered_human_test_pairs.csv")
 in_csv = set(pd.read_csv(L.C.BPD_META_PATH, usecols=["id"])["id"])
-need = (set(pairs.src_barcode) | set(pairs.tgt_barcode)) & in_csv
+REG_PATH = Path(os.environ.get("EXAMPLE_REG_PATH", ROOT / "retrain_prompt/pipeline/sft_example_registry.csv"))
+if REG_PATH.exists():
+    reg = pd.read_csv(REG_PATH)
+    reg_bpd = reg[(reg["split"] == "test") & (reg["direction"] == "fwd") & (reg["source"] == "bpd")]
+    need = set(reg_bpd["barcode"]) & in_csv
+else:
+    pairs = pd.read_csv(ORTHO / "human_panel_variants/recovered_human_test_pairs.csv")
+    need = (set(pairs.src_barcode) | set(pairs.tgt_barcode)) & in_csv
 assert need <= set(BC), f"{len(need - set(BC))} test barcodes outside the scan"
 
 
@@ -94,13 +109,14 @@ def dis_run(gate, *a, **k):
 
 
 def dis_draw(ax, scores, title, *a, **k):
-    want = "gated" if DIS.SRC_LABEL == "Acute26" else "full_list"  # pairs arm: dge_filtered, as in the note
-    if DIS.ONLY_CT is None and CUR["gate"] == want:
+    if DIS.ONLY_CT is None and CUR["gate"] == "full_list":
         dump(f"human|{DIS.SRC_LABEL}->{DIS.CONDITION}|{DIS.PAIRING}|{title}", scores)
     return _dis_draw(ax, scores, title, *a, **k)
 
 
 UC.run, UC.draw_panel, DIS.run, DIS.draw_panel = uc_run, uc_draw, dis_run, dis_draw
+UC.EXAMPLE_REG_PATH = REG_PATH
+T.EXAMPLE_REG_PATH = REG_PATH
 _atlas, _orig_atlas = {}, T.load_atlas_by_barcode
 
 
@@ -131,8 +147,16 @@ try:
         t0 = time.time() - 1
         rec.clear()
         vars(DIS).update(DIS_DEFAULTS)
-        DIS.TEST_INFERENCE_PATH = path
-        DIS.main()
+        for p in (ORTHO / "human_panel_variants/reports/rat_schema").glob("human_*_rescue_predicted_azi.xlsx"):
+            b = BACKUP / p.relative_to(ORTHO)
+            if b.exists():
+                shutil.copy2(b, p)
+        azi_path = path.parent / "inference_azi_results.jsonl"
+        if azi_path.exists() and azi_path.stat().st_size > 0:
+            print(f"[rescue] computing per-run human rescued panels from {azi_path}", flush=True)
+            ARP.VARIANTS = [run]
+            ARP.AZI_JSONL_OF = {run: azi_path}
+            ARP.main()
         T.TEST_INFERENCE = path
         T.main()
         UC.TEST_INFERENCE_PATH = path
@@ -142,7 +166,7 @@ try:
         for d in DIRS:
             for p in ours(d):
                 if p.stat().st_mtime >= t0:
-                    q = dest / ("rat" if d.name.startswith("rat") else "human") / p.parent.name / p.name
+                    q = dest / ("rat" if d.name.startswith("rat") else "human") / p.relative_to(d)
                     q.parent.mkdir(parents=True, exist_ok=True)
                     shutil.copy2(p, q)
         (dest / "scores.json").write_text(json.dumps(rec))

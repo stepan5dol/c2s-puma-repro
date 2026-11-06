@@ -34,7 +34,7 @@ FIG_DIR = HERE / "figures"
 REP_DIR.mkdir(exist_ok=True)
 FIG_DIR.mkdir(exist_ok=True)
 
-K = 800
+K = 1600
 MIN_N = 5
 SEED = 0
 
@@ -44,6 +44,7 @@ CT_MAP = {
     "aerocyte capillary endothelial cell": "aCap",
     "pericyte":                            "Pericyte",
     "pulmonary venous endothelial cell":   "VEC",
+    "vascular endothelial cell":           "VEC",
 }
 COND_ORDER = ["HO", "AZI"]
 
@@ -97,7 +98,8 @@ def load_cells(jsonl_path: Path) -> dict[tuple[str, str], list[dict]]:
             cond = condition_of(pert)
             if cond is None:
                 continue
-            unexposed = _PROMPT_RE["unexposed"].search(prompt).group(1).strip().split()[:K]
+            m_unexp = _PROMPT_RE["unexposed"].search(prompt)
+            unexposed = m_unexp.group(1).strip().split()[:K] if m_unexp else []
             gt = r["gt"].strip().split()[:K]
             pred = dedupe_first(r["pred"].strip().split())[:K]
             groups[(ct, cond)].append({"unexposed": unexposed, "gt": gt, "pred": pred})

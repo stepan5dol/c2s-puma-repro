@@ -32,7 +32,7 @@ RESCUED_HUMAN_PATH = BASE / "train-after-grpo-analysis/rescued_human_genes.txt"
 CONFIG_PATH  = BASE / "scripts/cell_types_config.json"
 PIPELINE_DIR = BASE / "pipeline"
 
-TOP_K       = 800
+TOP_K       = 1600
 RANDOM_SEED = 42
 N_PER_CT    = 50
 N_AUGMENT   = 2

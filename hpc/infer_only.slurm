@@ -41,22 +41,34 @@ HF_AUTH=$WORK/hf_auth_header
 (umask 077 && sed -n 's/^HF_TOKEN=/Authorization: Bearer /p' "$HOME/c2s/c2s.env" > "$HF_AUTH")
 
 # inputs: the same files and checksums as the training run recorded
+# data_src/dataset or data_src/inference on xdisk = the local dataset is meant: without its checksum list stop here
+# instead of inferring on the Hugging Face inputs (2026-11-05: the list was missing, the grid ran on the old test set)
+if [ -d "$DATA/data_src/dataset" ] || [ -d "$DATA/data_src/inference" ]; then
+    [ -s "$DATA/data_src/inputs_sha256.txt" ] \
+        || { echo "$DATA/data_src/dataset exists but $DATA/data_src/inputs_sha256.txt does not: not falling back to Hugging Face (run push.sh)" >&2; exit 1; }
+fi
+if [ -s "$DATA/data_src/inputs_sha256.txt" ]; then echo "data_src $DATA/data_src"; else echo "huggingface $SRC $AZI_SRC"; fi > "$OUT/inputs_source.txt"
 for s in $SETS; do
     case $s in
         test_t*|valid_t*) f=dataset/${s%_t*}_segments.jsonl; url=$SRC/$f ;;
         inference_azi*) f=inference/$s.jsonl; url=$AZI_SRC/$f ;;
         *) echo "unknown set $s" >&2; exit 1 ;;
     esac
-    [ -s "$WORK/in/$f" ] || curl -fsSL -H @"$HF_AUTH" "$url" -o "$WORK/in/$f"
-    # checksums from the sources, as train.slurm does: a run made with INFER=0 has no test line in its own file
-    case $s in
-        inference_azi*) list=$WORK/azi_sha256.txt; [ -s "$list" ] || curl -fsSL -H @"$HF_AUTH" "$AZI_SRC/inference/sha256.txt" -o "$list" ;;
-        *) list=$WORK/src_sha256.txt; [ -s "$list" ] || curl -fsSL -H @"$HF_AUTH" "$SRC/env_snapshot/inputs_sha256.txt" -o "$list" ;;
-    esac
+    if [ -s "$DATA/data_src/inputs_sha256.txt" ]; then
+        [ -s "$WORK/in/$f" ] || cp "$DATA/data_src/$f" "$WORK/in/$f"
+        list=$DATA/data_src/inputs_sha256.txt
+    else
+        [ -s "$WORK/in/$f" ] || curl -fsSL -H @"$HF_AUTH" "$url" -o "$WORK/in/$f"
+        # checksums from the sources, as train.slurm does: a run made with INFER=0 has no test line in its own file
+        case $s in
+            inference_azi*) list=$WORK/azi_sha256.txt; [ -s "$list" ] || curl -fsSL -H @"$HF_AUTH" "$AZI_SRC/inference/sha256.txt" -o "$list" ;;
+            *) list=$WORK/src_sha256.txt; [ -s "$list" ] || curl -fsSL -H @"$HF_AUTH" "$SRC/env_snapshot/inputs_sha256.txt" -o "$list" ;;
+        esac
+    fi
     n=$(grep -c -E "^[0-9a-f]{64}  $f\$" "$list")
     [ "$n" -ge 1 ] || { echo "no checksum for $f in $list" >&2; exit 1; }
     grep -E "^[0-9a-f]{64}  $f\$" "$list" | sort -u
-done | (cd "$WORK/in" && sha256sum -c)
+done | tee "$OUT/inputs_sha256.txt" | (cd "$WORK/in" && sha256sum -c)
 
 # the image's inference scripts, dtype line changed and checked
 for p in run_test run_azi; do
@@ -86,7 +98,10 @@ for s in $SETS; do
         test_t*|valid_t*)
             t=$(echo "${s##*_t}" | sed 's/^\(.\)/\1./')  # t08 -> 0.8, t10 -> 1.0
             run_infer "TEST_PATH=/in/dataset/${s%_t*}_segments.jsonl,OUT_PATH=/out/$s.jsonl,TEMPERATURE=$t" \
-                /code/run_test.py > "$OUT/$s.log" 2>&1 ;;
+                /code/run_test.py > "$OUT/$s.log" 2>&1
+            # one answer per line of the test set (a short file passed the old non-empty check)
+            nin=$(wc -l < "$WORK/in/dataset/${s%_t*}_segments.jsonl"); nout=$(wc -l < "$OUT/$s.jsonl")
+            [ "$nin" -eq "$nout" ] || { echo "$s: $nout records for $nin lines of the test set" >&2; exit 1; } ;;
         inference_azi*)
             run_infer "TEMPERATURE=1.0" /code/run_azi.py "/in/inference/$s.jsonl" "/out/${s}_results.jsonl" \
                 > "$OUT/$s.log" 2>&1 ;;

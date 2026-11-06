@@ -27,6 +27,7 @@ test example, differenced against the same baseline cell as the real arm.
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -50,6 +51,10 @@ sys.path.insert(0, str(PIPELINE_SHORT))
 import stage1_sft_bidir as S1
 
 PAIRS_CSV = HERE / "recovered_human_test_pairs.csv"
+EXAMPLE_REG_PATH = Path(os.environ.get(
+    "EXAMPLE_REG_PATH",
+    "/Users/stepandolzhenko/Documents/AzithroGemma/retrain_prompt/pipeline/sft_example_registry.csv",
+))
 TEST_INFERENCE = Path("/Users/stepandolzhenko/Documents/AzithroGemma/retrain_v2/results/test_inference_results_t10.jsonl")
 SEED = 0
 
@@ -60,7 +65,11 @@ CT_MAP = {"general capillary endothelial cell (endothelial)": "gCap",
           "aerocyte capillary endothelial cell (endothelial)": "aCap",
           "pericyte (mural)": "Pericyte",
           "vascular endothelial cell (endothelial)": "VEC",
-          "pulmonary venous endothelial cell (endothelial)": "VEC"}
+          "pulmonary venous endothelial cell (endothelial)": "VEC",
+          "gCap": "gCap",
+          "aCap": "aCap",
+          "Pericyte": "Pericyte",
+          "Pulmonary venous EC": "VEC"}
 
 ARMS = [
     ("Acute26", "He22", "human_He22_Acute26", "atlas"),
@@ -147,14 +156,58 @@ def load_atlas_by_barcode(barcodes, model):
     return {k: Xn[i] for i, k in enumerate(keys)}
 
 
+def load_pairs_table() -> pd.DataFrame:
+    if EXAMPLE_REG_PATH.exists():
+        reg = pd.read_csv(EXAMPLE_REG_PATH)
+        reg = reg[(reg["split"] == "test") & (reg["direction"] == "fwd") & (reg["source"].isin(["atlas", "bpd"]))].copy()
+        reg["ct"] = reg["cell_type"].map(CT_MAP)
+        rng = np.random.default_rng(SEED)
+        rows = []
+        for cond, src, pt, kind in ARMS:
+            if kind == "atlas":
+                for ct in PSH.CT_ORDER:
+                    tgt_sub = reg[(reg["condition"] == cond) & (reg["ct"] == ct)]
+                    src_pool = reg[(reg["condition"] == src) & (reg["ct"] == ct)]["barcode"].tolist()
+                    if tgt_sub.empty or not src_pool:
+                        continue
+                    replace = len(src_pool) < len(tgt_sub)
+                    src_bcs = rng.choice(src_pool, size=len(tgt_sub), replace=replace)
+                    for (_, r), sbc in zip(tgt_sub.iterrows(), src_bcs):
+                        rows.append({
+                            "idx": int(r["line_idx"]),
+                            "pair_type": pt,
+                            "cell_type": r["cell_type"],
+                            "ct": ct,
+                            "src_barcode": str(sbc),
+                            "tgt_barcode": str(r["barcode"]),
+                            "verified": True,
+                        })
+            else:
+                tgt_sub = reg[(reg["condition"] == cond) & reg["ct"].notna()]
+                for _, r in tgt_sub.iterrows():
+                    rows.append({
+                        "idx": int(r["line_idx"]),
+                        "pair_type": pt,
+                        "cell_type": r["cell_type"],
+                        "ct": r["ct"],
+                        "src_barcode": "",
+                        "tgt_barcode": str(r["barcode"]),
+                        "verified": True,
+                    })
+        return pd.DataFrame(rows)
+
+    pairs = pd.read_csv(PAIRS_CSV)
+    pairs = pairs[pairs["verified"]].copy()
+    pairs["ct"] = pairs["cell_type"].map(CT_MAP)
+    return pairs
+
+
 def main():
     print("[calibration] fitting rank->expr model (once)...")
     model = rem.fit_from_csv(CH.COUNTS_CSV)
     print(f"  r2={model.r2:.4f}")
 
-    pairs = pd.read_csv(PAIRS_CSV)
-    pairs = pairs[pairs["verified"]].copy()
-    pairs["ct"] = pairs["cell_type"].map(CT_MAP)
+    pairs = load_pairs_table()
 
     bpd_needed, atlas_needed, idx_needed = set(), set(), set()
     for cond, src, pt, kind in ARMS:

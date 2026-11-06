@@ -20,23 +20,36 @@ from collections import defaultdict
 import numpy as np
 from scipy.spatial.distance import cdist, pdist
 
-K = 800
+K = 1600
 CALIB = {"Rattus": (-0.64127, 5.7583), "Homo": (-0.6121373901170273, 5.541692798614713)}
 CT_MAP = {"general capillary endothelial cell": "gCap", "aerocyte capillary endothelial cell": "aCap",
-          "pericyte": "Pericyte", "pulmonary venous endothelial cell": "VEC"}
+          "pericyte": "Pericyte", "pulmonary venous endothelial cell": "VEC",
+          "vascular endothelial cell": "VEC"}
 RE = {k: re.compile(p) for k, p in {"species": r"Species:\s*([^\n]+)", "ct": r"Cell type:\s*([^\(\n]+)",
                                     "pert": r"Perturbation:\s*([^\n]+)", "unexp": r"\nUnexposed:\s*([^\n]+)"}.items()}
 
 
 def cond_of(species: str, pert: str):
     if species == "Rattus":
-        return "HO" if pert.startswith("Hyperoxia") else "AZI" if pert.startswith("Azithromycin") else None
+        if pert.startswith("Hyperoxia"):
+            return "HO"
+        if pert.startswith("Azithromycin"):
+            return "AZI"
+        if "room air" in pert:
+            return "RA"
+        return None
     if pert.startswith("Acute preterm lung injury"):
         return "Acute"
     if "pulmonary hypertension" in pert:
         return "BPD-PH"
     if pert.startswith("Progression from acute preterm lung injury"):
         return "BPD"
+    if "fetal lung development at gestational week 22" in pert:
+        return "He22"
+    if "postnatal day 0" in pert:
+        return "Term0d"
+    if "postnatal day 20" in pert:
+        return "Term20d"
     return None
 
 
@@ -61,8 +74,9 @@ def load(path):
         cond = cond_of(sp, RE["pert"].search(p).group(1).strip())
         if ct is None or cond is None:
             continue
+        m_un = RE["unexp"].search(p)
         groups[(sp, ct, cond)].append({
-            "unexp": RE["unexp"].search(p).group(1).strip().split()[:K],
+            "unexp": m_un.group(1).strip().split()[:K] if m_un else [],
             "gt": r["gt"].strip().split()[:K],
             "pred": dedupe(r["pred"].strip().split())[:K]})
     return groups
@@ -101,8 +115,9 @@ def main():
             n_un = len({" ".join(c["unexp"]) for c in g})
             dup_lines.append(f"{k[1]}/{k[2]}: records={n} unique_gt={n_gt} unique_prompts={n_un}")
             gt = recon([c["gt"] for c in g], vocab, slope, intercept)
-            cands = {"model": recon([c["pred"] for c in g], vocab, slope, intercept),
-                     "identity": recon([c["unexp"] for c in g], vocab, slope, intercept)}
+            cands = {"model": recon([c["pred"] for c in g], vocab, slope, intercept)}
+            if any(c["unexp"] for c in g):
+                cands["identity"] = recon([c["unexp"] for c in g], vocab, slope, intercept)
             cands["centroid"] = np.repeat(gt.mean(0, keepdims=True), n, axis=0)
             for name, P in cands.items():
                 dom = domain(gt, P)

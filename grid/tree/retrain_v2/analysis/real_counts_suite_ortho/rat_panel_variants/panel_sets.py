@@ -38,7 +38,7 @@ ABS_DIR = Path("/Users/stepandolzhenko/Documents/AzithroGemma/retrain_v2/analysi
 sys.path.insert(0, str(ABS_DIR))
 import common as C
 
-GATES = ("full_list", "gated")
+GATES = ("full_list",)
 RECOVERY_TYPES = ("Rescued_HO_down", "Rescued_HO_up")
 
 GATE_DESC = {

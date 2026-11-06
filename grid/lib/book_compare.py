@@ -20,8 +20,7 @@ from violins_book_tests import choose, run_test  # noqa: E402
 ALPHA, FAMILY = 0.05, 8
 ZF = norm.ppf(1 - ALPHA / FAMILY / 2) + norm.ppf(0.8)
 ARMS = [("rat|ho", "rat RA->HO"), ("rat|azi", "rat HO->AZI"), ("human|He22->Acute26", "human He22->Acute26"),
-        ("human|Term->BPDPH7mo", "human Term->BPD-PH"), ("human|Term->BPD7mo", "human Term->BPD"),
-        ("human|Acute26->BPD7mo", "human Acute26->BPD, pairs (dge_filtered)")]
+        ("human|Term->BPDPH7mo", "human Term->BPD-PH"), ("human|Term->BPD7mo", "human Term->BPD")]
 CT_SHORT = {"General": "gCap", "Aerocyte": "aCap", "Pericyte": "Pericyte", "Vascular": "VEC", "Pulmonary": "VEC"}
 
 

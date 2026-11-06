@@ -61,5 +61,15 @@ elif cmd[0] == "python" and cmd[1] in ("/code/run_test.py", "/opt/c2s/run_test.p
     assert os.path.exists(host(env["TEST_PATH"])), "no test set"
     print(f"INFO non-default args: {{'dtype': '{dtype}', 'model': '{env['MODEL_DIR']}'}}")
     open(host(env["OUT_PATH"]), "w").write(json.dumps({"model_host_path": model, "dtype": dtype, "T": env["TEMPERATURE"]}) + "\n")
+elif cmd[0] == "python" and cmd[1] in ("/code/run_azi.py", "/opt/c2s/run_azi.py"):
+    code = open(host(cmd[1])).read()
+    dtype = re.search(r'dtype="(\w+)"', code)[1]
+    if os.environ.get("MOCK_FORCE_DTYPE"):
+        dtype = os.environ["MOCK_FORCE_DTYPE"]
+    model = host(env["MODEL_DIR"])
+    assert os.path.exists(f"{model}/model.safetensors"), f"no model in {model}"
+    assert os.path.exists(host(cmd[2])), f"no azi set {cmd[2]}"
+    print(f"INFO non-default args: {{'dtype': '{dtype}', 'model': '{env['MODEL_DIR']}'}}")
+    open(host(cmd[3]), "w").write(json.dumps({"model_host_path": model, "dtype": dtype, "T": env["TEMPERATURE"]}) + "\n")
 else:
     sys.stderr.write(f"apptainer stub: unexpected command {cmd}\n"); sys.exit(1)

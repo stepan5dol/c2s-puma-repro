@@ -63,9 +63,10 @@ for line in open(G / "cells.tsv"):
     if len(have) < 3:
         missing.append((name, [f for f in ("test_t10.jsonl", "trainer_state.json", "scores.json") if f not in have], tj, ij))
         continue
-    for f, src in (("test_t10.jsonl", inf), ("trainer_state.json", ts)):
+    for f, src in (("test_t10.jsonl", inf), ("trainer_state.json", ts),
+                   ("inference_azi_results.jsonl", r / "inference_float32" / "inference_azi_results.jsonl")):
         link = RUNS / name / f
-        if not link.exists():
+        if src.exists() and not link.exists():
             link.symlink_to(src)
     cells[name] = dict(lr=float(m[1]), ep=int(m[2]), seed=int(m[3]), run=name, status="done", train_job=tj, infer_job=ij)
 

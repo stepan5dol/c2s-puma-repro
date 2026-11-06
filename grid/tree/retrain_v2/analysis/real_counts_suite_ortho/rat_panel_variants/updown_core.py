@@ -48,13 +48,22 @@ import panel_sets as PSets
 
 HERE = Path(__file__).parent
 CSV_PATH = HERE.parent / "rat" / "recovered_rat_test_pairs.csv"
+EXAMPLE_REG_PATH = Path(os.environ.get(
+    "EXAMPLE_REG_PATH",
+    "/Users/stepandolzhenko/Documents/AzithroGemma/retrain_prompt/pipeline/sft_example_registry.csv",
+))
 TEST_INFERENCE_PATH = Path(os.environ.get("TEST_INFERENCE_PATH",
     "/Users/stepandolzhenko/Documents/AzithroGemma/retrain_v2/results/test_inference_results_t10.jsonl"))
 
 CT_RAW_TO_CT = {"general capillary endothelial cell (endothelial)": "gCap",
                 "aerocyte capillary endothelial cell (endothelial)": "aCap",
                 "pericyte (mural)": "Pericyte",
-                "pulmonary venous endothelial cell (endothelial)": "VEC"}
+                "pulmonary venous endothelial cell (endothelial)": "VEC",
+                "vascular endothelial cell (endothelial)": "VEC",
+                "gCAP": "gCap",
+                "aCAP": "aCap",
+                "Peri": "Pericyte",
+                "VEC": "VEC"}
 
 SUBSETS = ("bg", "down", "up")
 X_POS = {("real", "bg"): 0.0, ("real", "down"): 1.0, ("real", "up"): 2.0,
@@ -176,6 +185,44 @@ def legend_handles_labels(expected):
     return h, ["background", PANEL_TITLE["down"], PANEL_TITLE["up"]]
 
 
+def load_pairs_df(arm_key: str) -> pd.DataFrame:
+    arm = ARMS[arm_key]
+    if EXAMPLE_REG_PATH.exists():
+        reg = pd.read_csv(EXAMPLE_REG_PATH)
+        reg = reg[(reg["split"] == "test") & (reg["direction"] == "fwd") & (reg["source"] == "rat")].copy()
+        reg["ct"] = reg["cell_type"].map(CT_RAW_TO_CT)
+        assert reg["ct"].notna().all(), f"unmapped rat cell types: {reg.loc[reg['ct'].isna(), 'cell_type'].unique()}"
+        src_cond = "RA" if arm_key == "ho" else "HO"
+        tgt_cond = arm["cond"]
+        rng = np.random.default_rng(C.SEED)
+        rows = []
+        for ct in C.CT_ORDER:
+            tgt_sub = reg[(reg["condition"] == tgt_cond) & (reg["ct"] == ct)]
+            src_pool = reg[(reg["condition"] == src_cond) & (reg["ct"] == ct)]["barcode"].tolist()
+            if tgt_sub.empty or not src_pool:
+                continue
+            replace = len(src_pool) < len(tgt_sub)
+            src_bcs = rng.choice(src_pool, size=len(tgt_sub), replace=replace)
+            for (_, r), sbc in zip(tgt_sub.iterrows(), src_bcs):
+                rows.append({
+                    "idx": int(r["line_idx"]),
+                    "pair_type": arm["pair_type"],
+                    "cell_type": r["cell_type"],
+                    "ct": ct,
+                    "src_barcode": str(sbc),
+                    "tgt_barcode": str(r["barcode"]),
+                    "verified": True,
+                })
+        return pd.DataFrame(rows)
+
+    df = pd.read_csv(CSV_PATH)
+    df = df[df["pair_type"] == arm["pair_type"]].copy()
+    assert df["verified"].all(), "unverified rows present -- do not trust unverified barcodes"
+    df["ct"] = df["cell_type"].map(CT_RAW_TO_CT)
+    assert df["ct"].notna().all()
+    return df
+
+
 def run(arm_key: str, gate: str):
     arm = ARMS[arm_key]
     expected = {"down": PSets.EXPECTED[("Rescued_HO_down", arm["cond"])],
@@ -185,11 +232,7 @@ def run(arm_key: str, gate: str):
     print(f"[calibration] slope={model.slope:.5f} intercept={model.intercept:.4f} r2={model.r2:.4f}")
     panels_by_ct = PSets.load_panels(gate)
 
-    df = pd.read_csv(CSV_PATH)
-    df = df[df["pair_type"] == arm["pair_type"]].copy()
-    assert df["verified"].all(), "unverified rows present -- do not trust unverified barcodes"
-    df["ct"] = df["cell_type"].map(CT_RAW_TO_CT)
-    assert df["ct"].notna().all()
+    df = load_pairs_df(arm_key)
 
     all_bc = list(pd.unique(df[["src_barcode", "tgt_barcode"]].values.ravel()))
     real_by_bc = load_real_counts_by_barcode(all_bc, model.gene_names)
@@ -233,7 +276,8 @@ def run(arm_key: str, gate: str):
             violins[ct][("model", s)] = means_model[s][~np.isnan(means_model[s])]
 
     if not violins:
-        raise SystemExit("no cell type passed the gates -- nothing to plot")
+        print("  WARN: no cell type passed the gates -- nothing to plot")
+        return
     if ONLY_CT is None:
         violins["POOLED"] = {k: np.concatenate([violins[ct][k] for ct in violins]) for k in X_POS}
         gene_counts["POOLED"] = {"n_genes_down": -1, "n_genes_up": -1}

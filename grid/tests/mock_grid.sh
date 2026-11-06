@@ -89,4 +89,50 @@ grep -q "^inference: failed" "$BAD/record.md" || fail "record.md of the failed j
 grep -q "did not run in float32" "$BAD/infer_fp32.log" || fail "infer_fp32.log does not say why"
 [ -s "$BAD/sft_pythia1b_short_full/model.safetensors" ] || fail "the trained model must be kept when inference fails"
 echo "   ok: exit $rc, record.md says inference failed, the model is kept"
+
+echo "== data_src: the local dataset is used, never silently replaced by the Hugging Face inputs"
+DS=$D/data_src
+python3 - "$DS" "$HERE/stubs" <<'PY'
+import os, sys
+sys.path.insert(0, sys.argv[2])
+import mockdata as M
+for rel in M.KNOWN:
+    p = os.path.join(sys.argv[1], rel)
+    os.makedirs(os.path.dirname(p), exist_ok=True)
+    open(p, "wb").write(M.content(rel))
+PY
+rerun() {  # rerun <id> <stamp>: the first training job of the queue again, under a new id and stamp; prints its exit code
+    python3 - "$MOCK_QUEUE" "$1" "$2" <<'PY'
+import json, os, sys
+q, i, stamp = sys.argv[1:]
+j = json.load(open(f"{q}/1001.json"))
+j["id"] = int(i); j["env"]["RUN_STAMP"] = stamp
+os.makedirs(f"{q}/q{i}")
+json.dump(j, open(f"{q}/q{i}/{i}.json", "w"))
+PY
+    python3 "$HERE/run_queue.py" "$MOCK_QUEUE/q$1" > /dev/null
+    python3 -c "import json;print(json.load(open('$MOCK_QUEUE/q$1/states.json'))['$1'])"
+}
+sums() { (cd "$DS" && sha256sum sft_pythia1b.yaml dataset/*.jsonl inference/*.jsonl > inputs_sha256.txt); }
+
+rc=$(rerun 3001 mock-ds-nolist)
+[ "$rc" != 0 ] || fail "data_src/dataset without inputs_sha256.txt: the job exited 0"
+grep -q "not falling back to Hugging Face" "$MOCK_QUEUE/q3001/3001.out" || fail "the job does not say why it stopped"
+echo "   ok: data_src/dataset without its checksum list stops the job (exit $rc)"
+
+sums
+rc=$(rerun 3002 mock-ds-ok)
+[ "$rc" = 0 ] || { tail -n 40 "$MOCK_QUEUE/q3002/3002.out"; fail "data_src job exit $rc"; }
+OK=$(ls -d "$D"/results/mock-ds-ok_*)
+grep -q "^data_src " "$OK/inputs_source.txt" || fail "training did not take data_src: $(cat "$OK/inputs_source.txt")"
+grep -q "^data_src " "$OK/inference_float32/inputs_source.txt" || fail "inference did not take data_src"
+grep -q "  dataset/test_segments.jsonl$" "$OK/inference_float32/inputs_sha256.txt" || fail "inference does not record its test set"
+echo "   ok: training and inference take data_src and record it"
+
+printf '{"stub": "second line"}\n' >> "$DS/dataset/test_segments.jsonl"; sums
+rc=$(rerun 3003 mock-ds-short)
+[ "$rc" != 0 ] || fail "1 answer for a 2-line test set: the job exited 0"
+SH=$(ls -d "$D"/results/mock-ds-short_*)
+grep -q "test_t10: 1 records for 2 lines of the test set" "$SH/infer_fp32.log" || fail "infer_fp32.log does not say why"
+echo "   ok: fewer answers than test lines fail the job (exit $rc)"
 echo "MOCK OK"

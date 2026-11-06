@@ -85,7 +85,7 @@ def _fit_from_matrix(X: np.ndarray, gene_names: list[str], k: int, n_cells: int,
 
 def fit(
     h5ad_path: str | Path,
-    k: int = 800,
+    k: int = 1600,
     n_cells: int = 2000,
     seed: int = 0,
     layer: str = "counts",
@@ -102,7 +102,7 @@ def fit(
 
 def fit_from_csv(
     counts_csv_path: str | Path,
-    k: int = 800,
+    k: int = 1600,
     n_cells: int = 2000,
     seed: int = 0,
     id_col: str = "id",
@@ -129,7 +129,7 @@ def fit_from_csv(
     return _fit_from_matrix(X, gene_names, k, n_cells, seed)
 
 
-def reconstruct(genes: list[str], model: RankExprModel, k: int = 800,
+def reconstruct(genes: list[str], model: RankExprModel, k: int = 1600,
                  floor_rank: int | None = None) -> np.ndarray:
     """Rank-ordered gene-name list -> dense [n_genes] log1p(CPM10k) vector.
 
@@ -154,7 +154,7 @@ def reconstruct(genes: list[str], model: RankExprModel, k: int = 800,
     return vec
 
 
-def reconstruct_batch(gene_lists: list[list[str]], model: RankExprModel, k: int = 800,
+def reconstruct_batch(gene_lists: list[list[str]], model: RankExprModel, k: int = 1600,
                        floor_rank: int | None = None) -> np.ndarray:
     """[n_cells] gene-name lists -> [n_cells, n_genes] dense reconstructed matrix."""
     out = np.zeros((len(gene_lists), model.n_genes), dtype=np.float32)

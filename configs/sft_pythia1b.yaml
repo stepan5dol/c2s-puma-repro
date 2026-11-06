@@ -1,0 +1,107 @@
+# Full fine-tune of vandijklab/C2S-Scale-Pythia-1b-pt (GPT-NeoX, 1B, torch_dtype
+# float32 natively) on pipeline_short/sft_dataset_bidir (13,886 train / 60 valid /
+# 892 test, minimally-viable scope: rat gCAP/aCAP/Peri/VEC + human gCap/aCap/
+# Pulmonary venous EC/Pericyte only).
+#
+# CONFIDENCE NOTES (read before running):
+#   - base_model, full-FT (no adapter), bf16, no chat_template, GPT-NeoX
+#     architecture facts: HIGH confidence, verified directly against the real
+#     config.json/tokenizer_config.json earlier this session.
+#   - `datasets: type: input_output` + segments format (label=false->masked/-100,
+#     label=true->loss): smoke-tested against a live axolotl install --
+#     `axolotl preprocess --debug` confirmed the mask boundary lands exactly at
+#     the "Perturbed cell:" answer span (5901 total / 2871 unmasked tokens on
+#     the sampled example, prompt+header fully masked, gene-sentence answer
+#     fully in loss).
+#   - micro_batch_size=4 / gradient_accumulation_steps=16 (effective batch 64):
+#     smoke-tested for 20 steps on the real A100 40GB -- peak
+#     memory/max_allocated=27.09GiB, device_reserved=31.09GiB, stable
+#     across steps (no growth). ~9GiB headroom. Real packed steps/epoch
+#     measured at ~132 (gather_len_batches=2113 / grad_accum=16).
+#   - num_epochs=6 is a CEILING, not a target: on this project's own history,
+#     the old 5x-LARGER 76,916-example full dataset saw eval_loss plateau
+#     within the first ~50-100 of 975 steps in a single epoch, after an
+#     initial fast drop -- and that run still collapsed to generic/
+#     housekeeping-gene predictions despite the flat loss. Lowered the
+#     ceiling from an earlier 15 to 6 since 15 epochs is excessive for a
+#     dataset this size; early_stopping_patience + load_best_model_at_end
+#     still decide the real stop point. cosine lr_scheduler intentionally
+#     holds LR near peak for a while (by design, decays slowly at first) --
+#     don't shorten the ceiling further just to force faster decay, the goal
+#     here is to keep LR up longer, not rush it down.
+
+base_model: vandijklab/C2S-Scale-Pythia-1b-pt
+model_type: AutoModelForCausalLM
+tokenizer_type: AutoTokenizer
+trust_remote_code: false
+
+# full fine-tune -- no adapter/LoRA
+adapter:
+load_in_8bit: false
+load_in_4bit: false
+strict: false
+
+# adjust paths if running on a remote GPU box (see sft_train-3.py's own
+# DATA_DIR comment for the same adjust-per-server-layout note)
+datasets:
+  - path: /workspace/axolotl/mainwork/dataset/train_segments.jsonl
+    type: input_output
+    ds_type: json
+
+test_datasets:
+  - path: /workspace/axolotl/mainwork/dataset/valid_segments.jsonl
+    type: input_output
+    ds_type: json
+    split: train
+
+val_set_size: 0
+output_dir: /workspace/axolotl/mainwork/sft_pythia1b_short_full
+
+sequence_len: 8192
+sample_packing: true
+pad_to_sequence_len: true
+eval_sample_packing: false
+
+# GPT-NeoX/Pythia specifics:
+#   - no chat_template on this tokenizer -- input_output segments handle
+#     masking directly, nothing chat-related needed here.
+#   - tie_word_embeddings=false on this checkpoint (confirmed via config.json
+#     earlier this session) -- axolotl's default embedding handling for
+#     GPTNeoXForCausalLM already respects this, no special flag needed.
+#   - flash_attention2 is supported for GPT-NeoX in transformers, but needs
+#     the `flash-attn` package built for your CUDA version. If it's not
+#     installed or fails to build, set this to false (sdpa is the safe
+#     fallback and works out of the box, same default sft_train-3.py used).
+flash_attention: true
+
+gradient_checkpointing: true
+bf16: true
+tf32: true
+
+micro_batch_size: 4
+gradient_accumulation_steps: 16   # effective batch 64 -- smoke-tested, ~27GiB/40GiB peak
+num_epochs: 6   # ceiling -- early stopping decides the real stop point
+
+optimizer: adamw_bnb_8bit
+lr_scheduler: cosine
+learning_rate: 1e-4
+warmup_ratio: 0.1
+max_grad_norm: 1.0
+weight_decay: 0.0
+
+logging_steps: 1
+eval_steps: 33   # ~132 steps/epoch measured via smoke test (gather_len_batches=2113 / grad_accum=16) -> 4 evals/epoch
+save_steps: 33
+save_total_limit: 5
+load_best_model_at_end: true
+metric_for_best_model: eval_loss
+greater_is_better: false
+early_stopping_patience: 4   # 6 evals (~1.5 epochs) with no eval_loss improvement -> stop
+
+special_tokens:
+  pad_token: "<|endoftext|>"
+
+seed: 42
+
+wandb_project:
+use_tensorboard: true

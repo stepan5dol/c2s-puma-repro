@@ -50,6 +50,9 @@ for f in rat.ho.azi.integrated.h5ad he_lung_atlas.h5ad 2022FetalLungIntCounts.h5
 for f in "$WORK"/data/BPD-PH/* "$WORK"/data/*.h5ad "$WORK"/data/*.json; do
     [ -s "$f" ] || { note "FAIL: missing data file $(readlink "$f") (run deploy.sh)"; exit 1; }
 done
+if [ -s "$D/data_src/dataset/sft_example_registry.csv" ]; then
+    ln -s "$D/data_src/dataset/sft_example_registry.csv" "$WORK/data/sft_example_registry.csv"
+fi
 ARUN() { apptainer exec --cleanenv --no-home --writable-tmpfs \
     --bind "$WORK:/work" --bind "$D:$D" --bind "$REPO:/repo:ro" \
     --env C2S_ROOT=/work/root,C2S_WORK=$GRID,C2S_RESULTS=$GRID/reference,PYTHONPATH=/repo/grid/lib,PYTHONFAULTHANDLER=1,HOME=/tmp \
@@ -60,6 +63,28 @@ ARUN python /repo/grid/lib/prepare_root.py /repo/grid/tree /work/data /work/root
 
 # the cells: grid/cells.tsv has one line per submitted cell: name  run_folder  train_job  infer_job
 [ -s "$GRID/cells.tsv" ] || { note "FAIL: no $GRID/cells.tsv"; exit 1; }
+# every finished cell must have answered the test set in data_src line for line (2026-11-05: the cells had inferred the
+# old 1566-line test set, the violins found none of the registry's records and failed after 12 min)
+ARUN python - "$GRID" "$D/data_src/dataset/test_segments.jsonl" <<'PY' 2>&1 | tee -a "$GRID/chain.log"
+import sys
+from pathlib import Path
+g, test = Path(sys.argv[1]), Path(sys.argv[2])
+if not test.exists():
+    sys.exit(0)
+n_test = sum(1 for _ in open(test))
+bad = []
+for line in open(g / "cells.tsv"):
+    name, run = line.rstrip("\n").split("\t")[:2]
+    inf = Path(run) / "inference_float32" / "test_t10.jsonl"
+    if inf.exists():
+        n = sum(1 for _ in open(inf))
+        if n != n_test:
+            bad.append(f"{name}: {n} records in {inf}, {test} has {n_test} lines")
+if bad:
+    print("FAIL: test inference does not match the test set in data_src:\n  " + "\n  ".join(bad))
+    sys.exit(1)
+print(f"test inference of every finished cell has {n_test} records, as {test}")
+PY
 ARUN python - "$GRID" <<'PY'
 import json, sys
 from pathlib import Path
