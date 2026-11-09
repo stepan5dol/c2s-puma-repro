@@ -9,7 +9,7 @@
 #SBATCH --output=/xdisk/vkalin/dolzhenko/c2s/logs/%x_%j.out
 
 # Send the result of a grid analysis job to Telegram: a short message (job states, STOPPED, NEXT) and the full
-# report as a text file (the decider's output: violins, eval_loss, reverse task, McNemar, energy guard).
+# report as a text file (the decider's output: violins, eval_loss, reverse task, sign test, energy guard).
 #   bash grid/notify_tg.sh --test                       login node: check the bot, find and save your chat id, send "test"
 #   sbatch --dependency=afterany:<analysis job> grid/notify_tg.sh <analysis job>
 # afterany: it also reports an analysis that failed or was cancelled because a cell failed.
@@ -92,7 +92,7 @@ STOP=$(cat "$GRID/STOPPED" 2>/dev/null || true)
     echo "C2S grid: analysis $AJ ${STATE:-?}"
     [ -n "$STOP" ] && echo "STOPPED: $STOP"
     grep -E '^  LR set by' <<< "$DEC" || true
-    # the last stage in full (B if it ran, else A): violins, eval_loss, reverse task, McNemar, energy; then NEXT
+    # the last stage in full (B if it ran, else A): violins, eval_loss, reverse task, sign test, energy; then NEXT
     if grep -q '^STAGE B' <<< "$DEC"; then sed -n '/^STAGE B/,$p' <<< "$DEC"; else sed -n '/^STAGE A/,$p' <<< "$DEC"; fi \
         | grep -vE '^(STOP|TRAIN):' || true
     echo

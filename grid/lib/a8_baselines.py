@@ -25,32 +25,41 @@ CALIB = {"Rattus": (-0.64127, 5.7583), "Homo": (-0.6121373901170273, 5.541692798
 CT_MAP = {"general capillary endothelial cell": "gCap", "aerocyte capillary endothelial cell": "aCap",
           "pericyte": "Pericyte", "pulmonary venous endothelial cell": "VEC",
           "vascular endothelial cell": "VEC"}
-RE = {k: re.compile(p) for k, p in {"species": r"Species:\s*([^\n]+)", "ct": r"Cell type:\s*([^\(\n]+)",
-                                    "pert": r"Perturbation:\s*([^\n]+)", "unexp": r"\nUnexposed:\s*([^\n]+)"}.items()}
+# prompts since 2026-11-09 (retrain_prompt/pipeline/common.py build_prompt): the species is in the instruction
+# ("... representing a Homo sapiens cell ..."), the state and the treatment are the Condition: and Treatment: lines
+RE = {k: re.compile(p) for k, p in {"species": r"(Rattus|Homo) (?:norvegicus|sapiens)", "ct": r"Cell type:\s*([^\(\n]+)",
+                                    "unexp": r"\nUnexposed:\s*([^\n]+)"}.items()}
+HUMAN_STATE = {  # CONDITION_STR of the human conditions; the two term infants differ only in Age
+    "acute preterm lung injury": "Acute",
+    "established bronchopulmonary dysplasia": "BPD",
+    "established bronchopulmonary dysplasia with pulmonary hypertension": "BPD-PH",
+    "normal fetal lung, late canalicular stage": "He22",
+}
 
 
-def cond_of(species: str, pert: str):
+def _line(text: str, name: str) -> str:
+    m = re.search(rf"{name}:\s*([^\n<]+)", text)
+    return m.group(1).strip() if m else ""
+
+
+def cond_of(species: str, text: str):
+    """Condition class of a forward prompt or of a reverse answer (gt or pred), from its Condition:, Treatment: and
+    (term infants) Age: lines. None if the text names no known condition."""
+    state, treat, age = _line(text, "Condition").lower(), _line(text, "Treatment").lower(), _line(text, "Age")
     if species == "Rattus":
-        if pert.startswith("Hyperoxia"):
-            return "HO"
-        if pert.startswith("Azithromycin"):
-            return "AZI"
-        if "room air" in pert:
+        if state.startswith("room air") and treat == "none":
             return "RA"
+        if state.startswith("hyperoxia"):
+            if treat == "none":
+                return "HO"
+            if treat.startswith("azithromycin"):
+                return "AZI"
         return None
-    if pert.startswith("Acute preterm lung injury"):
-        return "Acute"
-    if "pulmonary hypertension" in pert:
-        return "BPD-PH"
-    if pert.startswith("Progression from acute preterm lung injury"):
-        return "BPD"
-    if "fetal lung development at gestational week 22" in pert:
-        return "He22"
-    if "postnatal day 0" in pert:
-        return "Term0d"
-    if "postnatal day 20" in pert:
-        return "Term20d"
-    return None
+    if "azithromycin" in treat:  # human cells are trained without the drug (Treatment none or mechanical ventilation)
+        return None
+    if state == "term infant, normal lung tissue":
+        return "Term20d" if "postnatal day 20" in age else "Term0d" if "postnatal day 7" in age else None
+    return HUMAN_STATE.get(state)
 
 
 def dedupe(words):
@@ -71,7 +80,7 @@ def load(path):
         p = r["prompt"]
         sp = RE["species"].search(p).group(1).strip().split()[0]
         ct = CT_MAP.get(RE["ct"].search(p).group(1).strip())
-        cond = cond_of(sp, RE["pert"].search(p).group(1).strip())
+        cond = cond_of(sp, p)
         if ct is None or cond is None:
             continue
         m_un = RE["unexp"].search(p)

@@ -10,8 +10,12 @@ grid/start.sh  (= submit_cells.sh 1e-5:2:42 3e-5:2:42)     one call by you; then
 ```
 
 `decide.py` holds the rule (the scheme at https://claude.ai/artifact/Spx6j3W35P4boV2sLZHcY3 shows it):
-violins worse than the copy of the input drop a run; among the rest the reverse task for human cells
-(McNemar) decides, ties go to the lower eval_loss (stage A) or fewer epochs (stage B), the energy distance is a guard.
+violins worse than the copy of the input drop a run; among the rest the leader has the lowest violin mismatch and
+the most significant violins of the 40 strata, every run not significantly worse than the leader (sign test over the
+strata, Japkowicz & Shah 2011 sec. 6.6.1, Bonferroni-Dunn over k-1, sec. 6.7) is tied with it, ties go to the lower
+eval_loss (stage A) or fewer epochs (stage B), the energy distance is a guard. The strata are not independent (shared
+cells), so the sign test p values are optimistic. Until 2026-11-09 the rule used McNemar (first on the reverse task,
+then on the strata, where it could not change the outcome).
 Edge of the explored grid -> one more cell beyond it. The chain stops, and says why in `grid/STOPPED`, when the rule
 says stop or finished, when a Slurm job of a cell fails (training or its inference), or when `MAX_CELLS` (default 9) trainings are reached.
 Decisions with their reasons: `grid/decisions/decision_NN.json`; log: `grid/chain.log`.
@@ -60,7 +64,7 @@ Watch it:  `squeue -u $USER`,  `tail -f /xdisk/vkalin/dolzhenko/c2s/grid/chain.l
    `MAX_CELLS=0`: the analysis after these cells compares 1e-4 at 1/2/4 epochs, writes the decision and stops; `STOPPED`
    says which cell the rule would train next. Tested by `grid/tests/force_lr.sh`.
 6. Telegram after an analysis: `grid/notify_tg.sh` sends a short message (job states, `STOPPED`, the last stage with
-   violins, eval_loss, reverse task, McNemar, energy, `NEXT`) and the full report as a file, also kept in `grid/reports/`.
+   violins, eval_loss, reverse task, sign test, energy, `NEXT`) and the full report as a file, also kept in `grid/reports/`.
    Once: make a bot with @BotFather, write it any message, put the token in `~/c2s/c2s.env` without echoing it, check:
    ```
    read -rsp "token: " T && echo "TG_TOKEN=$T" >> ~/c2s/c2s.env && unset T && chmod 600 ~/c2s/c2s.env

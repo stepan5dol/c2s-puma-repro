@@ -65,7 +65,8 @@ CT_MAP = {
 COND_ORDER = ["Acute", "BPD", "BPD-PH"]
 
 _PROMPT_RE = {
-    "species":      re.compile(r"Species:\s*([^\n]+)"),
+    # old prompts: "Species: Homo sapiens"; prompts since 2026-11-09: "... representing a Homo sapiens cell ..."
+    "species":      re.compile(r"(Rattus norvegicus|Homo sapiens)"),
     "cell_type":    re.compile(r"Cell type:\s*([^\(\n]+)"),
     "perturbation": re.compile(r"Perturbation:\s*([^\n]+)"),
     "unexposed":    re.compile(r"\nUnexposed:\s*([^\n]+)"),
@@ -126,6 +127,22 @@ def condition_of_age(age: str) -> str | None:
     return None
 
 
+_STATE_RE = re.compile(r"\nCondition:\s*([^\n]+)")
+STATE_TO_COND = {  # retrain_prompt/pipeline/common.py CONDITION_STR (prompts since 2026-11-09)
+    "acute preterm lung injury": "Acute",
+    "established bronchopulmonary dysplasia": "BPD",
+    "established bronchopulmonary dysplasia with pulmonary hypertension": "BPD-PH",
+}
+
+
+def condition_of_prompt(prompt: str) -> str | None:
+    """Disease stage of a human AZI prompt: its Condition: line (new format), else the Age: line (old format)."""
+    m = _STATE_RE.search(prompt)
+    if m:
+        return STATE_TO_COND.get(m.group(1).strip())
+    return condition_of_age(_AGE_RE.search(prompt).group(1).strip())
+
+
 def load_azi_counterfactual(jsonl_path: Path = AZI_RESULTS_PATH) -> dict[tuple[str, str], list[dict]]:
     """Human AZI counterfactual: real disease-state baseline ("Unexposed:")
     paired with the model's predicted post-AZI cell sentence ("pred"). No
@@ -146,8 +163,7 @@ def load_azi_counterfactual(jsonl_path: Path = AZI_RESULTS_PATH) -> dict[tuple[s
             ct = CT_MAP.get(ct_raw)
             if ct is None:
                 continue
-            age = _AGE_RE.search(prompt).group(1).strip()
-            cond = condition_of_age(age)
+            cond = condition_of_prompt(prompt)
             if cond is None:
                 continue
             m_unexp = _PROMPT_RE["unexposed"].search(prompt)

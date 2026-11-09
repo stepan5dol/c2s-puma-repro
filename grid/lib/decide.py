@@ -4,9 +4,15 @@ The rule is the one on the scheme (https://claude.ai/artifact/Spx6j3W35P4boV2sLZ
 existing scripts and checked on the three models we have (results/fp32_2026-10-30/select_rule/):
 
   Step 1  drop a run if, on the manuscript's violins, it does not beat the copy of the input cell.
-  Step 2  among the rest take the one that names the condition right more often for human real cells
-          (reverse task). Every run the leader is NOT significantly better than (McNemar, Bonferroni over the
-          comparisons made) is tied with it; the tie goes to the lower eval_loss (stage A) or fewer epochs (stage B).
+  Step 2  (since 2026-11-09) the leader is the run with the lowest violin mismatch, then the most significant
+          violins of the 40 strata. Every run that is NOT significantly worse than the leader is tied with it:
+          sign test over the 40 strata (Japkowicz & Shah 2011, sec. 6.6.1, pp. 231-233: strata as domains, wins
+          and losses, ties split evenly), two-sided (sec. 2.2, p. ~71: the leader is chosen on the same data, so the
+          direction is not known in advance), Bonferroni-Dunn over the k-1 comparisons with the leader (sec. 6.7,
+          pp. 255-256). The tie goes to the lower eval_loss (stage A) or fewer epochs (stage B).
+          Limitation: the strata are not independent (down and up of one arm and cell type use the same cells;
+          RA->HO and HO->AZI share the HO cells, Term->BPD and Term->BPD-PH the Term cells); neither book gives a
+          test for dependent domains, so the p values are optimistic.
   Step 3  guard: the chosen run's energy distance must not be significantly worse than any other kept run's;
           if it is, the run is out and steps 2-3 repeat without it.
 
@@ -100,9 +106,10 @@ def reverse_right(path):
         r = json.loads(line)
         if r["direction"] != "rev":
             continue
-        sp = "Rattus" if "Rattus" in r["prompt"].split("\n\n")[0] else "Homo"
-        gt_c = cond_of(sp, field(r["gt"], "Condition"))
-        pred_c = cond_of(sp, field(r["pred"], "Condition"))
+        sp = "Rattus" if "Rattus" in r["prompt"].split("\n")[0] else "Homo"
+        # condition class from the answer's Condition: + Treatment: (+ Age: for the term infants), a8_baselines.cond_of
+        gt_c = cond_of(sp, r["gt"])
+        pred_c = cond_of(sp, r["pred"])
         out[r["idx"]] = (sp, gt_c is not None and gt_c == pred_c)
     return out
 
@@ -116,7 +123,7 @@ def energy_groups(path, use_input=False):
         p = r["prompt"]
         sp = RE["species"].search(p).group(1).strip().split()[0]
         ct = CT_MAP.get(RE["ct"].search(p).group(1).strip())
-        cond = cond_of(sp, RE["pert"].search(p).group(1).strip())
+        cond = cond_of(sp, p)
         if ct is None or cond is None:
             continue
         if use_input:
@@ -180,19 +187,27 @@ def load_run(rundir):
                 loss=final_eval_loss(d / "trainer_state.json") if (d / "trainer_state.json").exists() else float("nan"))
 
 
-def mcnemar(a, b):
-    n10 = sum(1 for x, y in zip(a, b) if y and not x)
-    n01 = sum(1 for x, y in zip(a, b) if x and not y)
-    p = binomtest(n10, n10 + n01, 0.5).pvalue if n10 + n01 else 1.0
-    return n10, n01, p
+
+def sign_test(a, b):
+    """Sign test of two runs over the same domains (Japkowicz & Shah 2011, sec. 6.6.1, pp. 231-233); a domain is one
+    of the 40 violin strata, a and b are the per-stratum booleans (violin significant in the expected direction).
+    A win of a: a ok and b not; ties (both ok or both not) are split evenly between the two counts, an odd tie is
+    dropped. Under H0 the count of a is Binomial(n, 1/2); two-sided exact p. Returns (wins_a, wins_b, ties, p)."""
+    wa = sum(1 for x, y in zip(a, b) if x and not y)
+    wb = sum(1 for x, y in zip(a, b) if y and not x)
+    ties = len(a) - wa - wb
+    na, nb = wa + ties // 2, wb + ties // 2
+    p = binomtest(na, na + nb, 0.5).pvalue if na + nb else 1.0
+    return wa, wb, ties, p
 
 
 def pick_best(names, runs, copy_threshold, log, tiebreak):
     """Steps 1-3 among the named finished runs:
       Step 1  drop a run if its 5-arm full_list violin mismatch does not beat the copy threshold.
-      Step 2  rank kept runs by forward violin quality across the 40 full_list strata (lowest mismatch,
-              highest passed strata, McNemar across the 40 strata); tiebreak(name) breaks ties
-              (stage A: lower eval_loss; stage B: fewer epochs). Reverse task accuracy is logged descriptively.
+      Step 2  leader = lowest mismatch, then most significant violins of the 40 strata (then tiebreak). A run whose
+              sign test against the leader (sign_test, Bonferroni-Dunn: p x (k-1), k = kept runs) is not
+              significant is tied with the leader; tiebreak(name) picks among the tied (stage A: lower eval_loss;
+              stage B: fewer epochs). Reverse task accuracy is logged descriptively.
       Step 3  energy distance guard against every other kept run.
     Returns (winner, why)."""
     for n in names:
@@ -222,17 +237,21 @@ def pick_best(names, runs, copy_threshold, log, tiebreak):
         lead = order[0]
         tied = [lead]
         for n in order[1:]:
-            n10, n01, p = mcnemar(runs[n]["strata_ok"], runs[lead]["strata_ok"])
+            w_lead, w_n, ties, p = sign_test(runs[lead]["strata_ok"], runs[n]["strata_ok"])
             pb = min(1.0, p * (len(kept) - 1))
-            log(f"  {lead} vs {n} (40 violin strata): only {lead} ok {n10}, only {n} ok {n01}, McNemar p_bonf {pb:.2g}")
-            if pb >= ALPHA and runs[n]["mismatch"] == runs[lead]["mismatch"] and runs[n]["n_violins"] == runs[lead]["n_violins"]:
+            log(f"  {lead} vs {n} ({len(STRATA)} violin strata): {lead} wins {w_lead}, {n} wins {w_n}, ties {ties}; "
+                f"sign test p {p:.2g}, Bonferroni-Dunn x{len(kept) - 1} {pb:.2g}"
+                f"{'' if pb < ALPHA else ' -> tied with the leader'}")
+            if pb >= ALPHA:
                 tied.append(n)
         if len(tied) == 1:
             cand = lead
-            why = f"forward violins: {runs[cand]['n_violins']}/{len(STRATA)} (mismatch {runs[cand]['mismatch']})"
+            why = (f"forward violins: {runs[cand]['n_violins']}/{len(STRATA)} (mismatch {runs[cand]['mismatch']}), "
+                   "significantly better than every other run (sign test)")
         else:
             cand = min(tied, key=tiebreak)
-            why = f"forward violins tied on {tied} ({runs[cand]['n_violins']}/{len(STRATA)}, mismatch {runs[cand]['mismatch']}); tie-break"
+            why = (f"not significantly different from the leader {lead} (sign test, Bonferroni-Dunn): {tied}; "
+                   f"tie-break -> {cand} ({runs[cand]['n_violins']}/{len(STRATA)}, mismatch {runs[cand]['mismatch']})")
         guard = None
         for n in kept:
             if n == cand:

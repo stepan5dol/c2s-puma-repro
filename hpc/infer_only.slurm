@@ -10,7 +10,8 @@
 #SBATCH --output=/xdisk/vkalin/dolzhenko/c2s/logs/%x_%j.out
 
 # Inference only, on the final model of an existing training run (train.slurm of c2s-puma-repro),
-# with the image's own run_test.py / run_azi.py; the only change is the vLLM dtype.
+# with the image's own run_test.py / run_azi.py; changed: the vLLM dtype, how a forward prompt is recognised and the
+# forward generation limit (see the loop over run_test run_azi below).
 # usage: RUN=/xdisk/vkalin/dolzhenko/c2s/results/<run folder> [SETS="test_t10 ..."] [DTYPE=float32] sbatch infer_only.slurm
 # MODEL_PATH: the model folder (default $RUN/$OUTNAME); train.slurm with INFER_FP32=1 runs this script at the end of
 #       training, inside its own job, on the end-of-run model in its work folder.
@@ -70,11 +71,22 @@ for s in $SETS; do
     grep -E "^[0-9a-f]{64}  $f\$" "$list" | sort -u
 done | tee "$OUT/inputs_sha256.txt" | (cd "$WORK/in" && sha256sum -c)
 
-# the image's inference scripts, dtype line changed and checked
+# the image's inference scripts (built 2026-10-19), changed and checked:
+#  - dtype of vLLM
+#  - forward prompts are recognised by their first words; the image looks for the old "Determine the single cell's
+#    expression changes", the prompts since 2026-11-09 start with "Create a ranked list of genes in decreasing order
+#    of expression" (retrain_prompt/pipeline/common.py FWD_PROMPT_START); with the old test every record would be "rev"
+#  - forward generation limit 4096 -> 7936 new tokens: a cell sentence of up to 2000 genes is up to ~7300 tokens and
+#    the longest forward prompt 85, within max_model_len 8192 (with 4096 every generated cell was cut short)
+FWD_OLD="\"Determine the single cell's expression changes\" in prompt\[:64\]"
+FWD_NEW='prompt.startswith("Create a ranked list of genes in decreasing order of expression")'
 for p in run_test run_azi; do
     apptainer exec "$SIF" cat /opt/c2s/$p.py > "$WORK/code/$p.py"
     sed -i "s/dtype=\"bfloat16\"/dtype=\"$DTYPE\"/" "$WORK/code/$p.py"
+    sed -i "s/$FWD_OLD/$FWD_NEW/; s/^MAX_NEW_TOKENS_FWD = 4096\$/MAX_NEW_TOKENS_FWD = 7936/" "$WORK/code/$p.py"
     [ "$(grep -c "dtype=\"$DTYPE\"" "$WORK/code/$p.py")" -eq 1 ]
+    [ "$(grep -cF "$FWD_NEW" "$WORK/code/$p.py")" -eq 1 ] || { echo "$p.py: forward prompts not recognised" >&2; exit 1; }
+    [ "$(grep -c '^MAX_NEW_TOKENS_FWD = 7936$' "$WORK/code/$p.py")" -eq 1 ] || { echo "$p.py: forward limit not set" >&2; exit 1; }
     apptainer exec "$SIF" cat /opt/c2s/$p.py | diff - "$WORK/code/$p.py" > "$OUT/$p.diff" || true
 done
 cp "$0" "$OUT/infer_only.slurm"
