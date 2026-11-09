@@ -34,7 +34,7 @@ FIG_DIR = HERE / "figures"
 REP_DIR.mkdir(exist_ok=True)
 FIG_DIR.mkdir(exist_ok=True)
 
-K = 1600
+K = 2000
 MIN_N = 5
 SEED = 0
 

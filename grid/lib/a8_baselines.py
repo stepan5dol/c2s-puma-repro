@@ -20,7 +20,7 @@ from collections import defaultdict
 import numpy as np
 from scipy.spatial.distance import cdist, pdist
 
-K = 1600
+K = 2000  # cap of the cell sentence in retrain_prompt/pipeline/common.py TOP_K (expressed genes only, 2026-11-09)
 CALIB = {"Rattus": (-0.64127, 5.7583), "Homo": (-0.6121373901170273, 5.541692798614713)}
 CT_MAP = {"general capillary endothelial cell": "gCap", "aerocyte capillary endothelial cell": "aCap",
           "pericyte": "Pericyte", "pulmonary venous endothelial cell": "VEC",

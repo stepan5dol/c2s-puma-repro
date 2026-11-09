@@ -467,12 +467,16 @@ fi
 
 nvidia-smi > "$RUN/nvidia-smi.txt"
 
+# AXOLOTL_DATASET_NUM_PROC: without it axolotl takes os.cpu_count() = all 96 cores of the node, not the job's
+# (axolotl 1855055, utils/datasets.py:11-21); the save step then starts min(rows // 256, 96) processes
+# (utils/data/shared.py:502). 2026-11-06, job 24554293: 96 processes on the 27566-row set, preprocess died
+# with "Too many open files"; the 14520-row set (56 processes) passed. The yaml stays untouched.
 run() {
     apptainer exec --nv --cleanenv --no-home --writable-tmpfs \
         --bind "$WORK/mainwork:/workspace/axolotl/mainwork" \
         --bind "$WORK/last_run_prepared:/workspace/axolotl/last_run_prepared" \
         --bind "$WORK/hf:/hf" --bind "$WORK/triton:/triton" \
-        --env HF_HOME=/hf,TRITON_CACHE_DIR=/triton,HOME=/tmp,PYTHONFAULTHANDLER=1$PYENV \
+        --env HF_HOME=/hf,TRITON_CACHE_DIR=/triton,HOME=/tmp,PYTHONFAULTHANDLER=1,AXOLOTL_DATASET_NUM_PROC=${SLURM_CPUS_PER_TASK:-8}$PYENV \
         --pwd /workspace/axolotl "$SIF" "$@"
 }
 

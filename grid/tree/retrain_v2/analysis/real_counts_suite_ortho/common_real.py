@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import numpy as np
 
-K = 1600
+K = 2000
 
 
 def truncate_topk(X: np.ndarray, k: int = K) -> np.ndarray:

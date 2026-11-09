@@ -35,10 +35,13 @@ for cell in "$@"; do
     grep -q "^$NAME	" "$GRID/cells.tsv" 2>/dev/null && { echo "cell $NAME is already in the grid" >&2; exit 1; }
     STAMP=$(date +%Y-%m-%d_%H%M%S)
     RUN=$D/results/${STAMP}_puma-a100mig-repro-ep${EP}-fp32-lr${LR}-s${SEED}
-    # time: training 2.5 h per epoch (measured, fp32 on the A100 slice) x 1.6 + 1 h for setup and saving,
-    # + INFER_HOURS for the fp32 inference of the test set in the same job: measured 1 h 28 min of generation for
-    # test_t10 on the A100 slice (run 2026-10-28_1152, job 24473264), plus loading -> 3 h
-    HOURS=$(awk -v e="$EP" -v i="${INFER_HOURS:-3}" 'BEGIN{h = e * 2.5 * 1.6 + 1 + i; printf "%d", (h == int(h)) ? h : int(h) + 1}')
+    # time, scaled from run 2026-10-28_1152 (fp32 on the A100 slice, pipeline_short set) to the retrain_prompt set
+    # (expressed genes, at most 2000, 2026-11-09). Not measured on the new set yet: replace after the first cell.
+    #   training: 302 min for 2 epochs on 12182 packed 8192-token bins; every bin is padded to 8192, so time ~ bins;
+    #     the new set packs into 18607 bins -> 3.9 h per epoch, x 1.6, + 1 h for setup and saving
+    #   inference (INFER_HOURS): test_t10 fp32 took 1 h 28 min for 2.25M generated tokens (job 24473264); the new test
+    #     set has 10.50M answer tokens -> 6.8 h; inference_azi (631 prompts) ~1.8 h; with loading and margin -> 10 h
+    HOURS=$(awk -v e="$EP" -v i="${INFER_HOURS:-10}" 'BEGIN{h = e * 3.9 * 1.6 + 1 + i; printf "%d", (h == int(h)) ? h : int(h) + 1}')
     TRAIN=$(MODEL=pythia1b EPOCHS=$EP LR=$LR SEED=$SEED PRECISION=fp32 INFER=0 INFER_FP32=1 REPO=$REPO NO_EARLY_STOP=1 CKPTS=none \
         RUN_STAMP=$STAMP sbatch --parsable --job-name="g-$NAME" --time="$HOURS:00:00" "$REPO/hpc/train.slurm")
     # cells.tsv: name  run_folder  train_job  infer_job (the same job now)
