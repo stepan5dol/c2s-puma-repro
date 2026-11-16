@@ -1,0 +1,3 @@
+# copies of data, not published; deploy.sh brings them to xdisk with rsync (tree/ has its own .gitignore)
+reference/
+gold/
