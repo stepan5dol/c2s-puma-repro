@@ -24,12 +24,19 @@ for f in gold/test_t10.jsonl gold/inference_azi_results.jsonl infer_only_2026110
          tree/retrain_v2/analysis/real_counts_suite_ortho/human_panel_variants/filter_to_rat_schema.py; do
     [ -s "$HERE/$f" ] || { echo "missing $HERE/$f" >&2; exit 1; }
 done
-# check every run before submitting anything
+# check every run before submitting anything. The runs come only from the old grid's own list (grid_old_20261105/cells.tsv);
+# its answers must be in the old format: 1566 test answers (the new test set has 4198) and the input cell in the prompt
 while IFS=$'\t' read -r name run tj ij; do
     [ -f "$run/sft_pythia1b_short_full/config.json" ] || { echo "$name: no model in $run/sft_pythia1b_short_full" >&2; exit 1; }
     t=$run/inference_float32/test_t10.jsonl
     [ -s "$t" ] || { echo "$name: no $t" >&2; exit 1; }
     n=$(wc -l < "$t"); [ "$n" -eq 1566 ] || { echo "$name: $n test answers in $t, the old test set has 1566" >&2; exit 1; }
+    grep -q "Unexposed:" "$t" || { echo "$name: $t has no input cell in its prompts: not the old format" >&2; exit 1; }
+    a=$run/inference_float32/inference_azi_results.jsonl
+    if [ -s "$a" ]; then
+        n=$(wc -l < "$a"); [ "$n" -eq 631 ] || { echo "$name: $n AZI answers in $a, expected 631" >&2; exit 1; }
+        grep -q "Unexposed:" "$a" || { echo "$name: $a has no input cell in its prompts: not the old format" >&2; exit 1; }
+    fi
 done < "$CELLS"
 
 mkdir -p "$OUT" "$D/logs"
