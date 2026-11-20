@@ -34,7 +34,10 @@ for p in (HV, SUITE, R / "analysis"):
 
 import rank_expr_model as rem  # noqa: E402
 
-z = np.load(R / "analysis/reports/rank_expr_model.npz", allow_pickle=True)
+# K = 2000 calibration (lib/fit_calibration_k2000.py). reports/rank_expr_model.npz is the K = 800 fit (r2 0.8361) and
+# was loaded here for the K = 2000 grid until 2026-11-20: model ranks 801-2000 sat on the extension of a line fitted to 1-800.
+z = np.load(R / "analysis/reports/rank_expr_model_k2000.npz", allow_pickle=True)
+assert int(z["k"]) == 2000, z["k"]
 _names = list(z["gene_names"])
 HUMAN_MODEL = rem.RankExprModel(float(z["slope"]), float(z["intercept"]), float(z["r2"]),
                                 {g: i for i, g in enumerate(_names)}, _names)
