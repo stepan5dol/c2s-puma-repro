@@ -46,7 +46,7 @@ L = g["L"]
 ARP = g["ARP"]
 s = g["_scan_once"]()
 CSV = Path(L.C.BPD_COUNTS_PATH).resolve()
-HEADER = _read_csv(CSV, index_col="id", nrows=0).columns
+HEADER = pd.Index(s["raw_columns"])
 BC = list(s["bc"])
 
 in_csv = set(pd.read_csv(L.C.BPD_META_PATH, usecols=["id"])["id"])

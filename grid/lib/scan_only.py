@@ -60,20 +60,41 @@ _scan = {}
 
 def _scan_once():
     if not _scan:
-        print("[scan] one chunked read of the counts CSV for", ALL_CONDS, flush=True)
         meta = pd.read_csv(L.C.BPD_META_PATH, index_col="id")
         meta["condition"] = meta["dataset"].map(L.C.DATASET_TO_CONDITION)
         meta = meta[meta["condition"].isin(ALL_CONDS) & meta["celltype"].isin(L.C.TARGET_CELL_TYPES)]
         needed = set(meta.index)
-        chunks_X, chunks_bc, genes = [], [], None
-        for chunk in pd.read_csv(L.C.BPD_COUNTS_PATH, index_col="id", chunksize=5000):
-            if genes is None:
-                genes = L.remap_gene_names(chunk.columns.tolist())
-            rows_here = [bc for bc in chunk.index if bc in needed]
-            if rows_here:
-                chunks_X.append(chunk.loc[rows_here].values.astype(np.float32))
-                chunks_bc.extend(rows_here)
-        _scan.update(X=np.vstack(chunks_X), genes=genes, bc=np.array(chunks_bc),
+        csv_p = Path(L.C.BPD_COUNTS_PATH)
+        h5ad_p = csv_p.with_suffix(".h5ad")
+        if not h5ad_p.exists():
+            h5ad_p = csv_p.resolve().with_suffix(".h5ad")
+        if h5ad_p.exists():
+            import anndata as ad
+            print(f"[scan] reading h5ad {h5ad_p.name} for", ALL_CONDS, flush=True)
+            a = ad.read_h5ad(h5ad_p)
+            mask = a.obs_names.isin(needed)
+            a_sub = a[mask]
+            X = a_sub.X
+            if hasattr(X, "toarray"):
+                X = X.toarray()
+            X = np.asarray(X, dtype=np.float32)
+            raw_columns = a.var_names.tolist()
+            genes = L.remap_gene_names(raw_columns)
+            chunks_bc = a_sub.obs_names.tolist()
+            del a, a_sub
+        else:
+            print("[scan] one chunked read of the counts CSV for", ALL_CONDS, flush=True)
+            chunks_X, chunks_bc, raw_columns, genes = [], [], None, None
+            for chunk in pd.read_csv(L.C.BPD_COUNTS_PATH, index_col="id", chunksize=5000):
+                if raw_columns is None:
+                    raw_columns = chunk.columns.tolist()
+                    genes = L.remap_gene_names(raw_columns)
+                rows_here = [bc for bc in chunk.index if bc in needed]
+                if rows_here:
+                    chunks_X.append(chunk.loc[rows_here].values.astype(np.float32))
+                    chunks_bc.extend(rows_here)
+            X = np.vstack(chunks_X)
+        _scan.update(X=X, genes=genes, raw_columns=raw_columns, bc=np.array(chunks_bc),
                      ct=meta.loc[chunks_bc, "celltype"].values, cond=meta.loc[chunks_bc, "condition"].values)
         print(f"[scan] {_scan['X'].shape[0]} cells x {_scan['X'].shape[1]} genes", flush=True)
     return _scan
