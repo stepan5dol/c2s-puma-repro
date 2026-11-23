@@ -54,6 +54,8 @@ EXAMPLE_REG_PATH = Path(os.environ.get(
 ))
 TEST_INFERENCE_PATH = Path(os.environ.get("TEST_INFERENCE_PATH",
     "/Users/stepandolzhenko/Documents/AzithroGemma/retrain_v2/results/test_inference_results_t10.jsonl"))
+MODEL_INFERENCE = [TEST_INFERENCE_PATH]
+MODEL_CELLS_SEED = 0
 
 CT_RAW_TO_CT = {"general capillary endothelial cell (endothelial)": "gCap",
                 "aerocyte capillary endothelial cell (endothelial)": "aCap",
@@ -169,8 +171,10 @@ def draw_panel(ax, scores, title, delta_label, expected, show_legend=False):
     for x, arm in ((1.0, "datasets"), (4.4, "model")):
         ax.text(x, ax.get_ylim()[1], arm, ha="center", va="bottom", fontsize=PS.FS_ANNOT,
                 color="#666666")
-    n_real = len(scores[("real", "down")])
-    ax.set_title(f"{title}\nn = {n_real} cells", fontsize=PS.FS_TITLE, pad=16)
+    n_real, n_model = len(scores[("real", "down")]), len(scores[("model", "down")])
+    stats["n_real"], stats["n_model"] = n_real, n_model
+    ax.set_title(f"{title}\nn = {n_real} cells" + (f", {n_model} generated" if n_model != n_real else ""),
+                 fontsize=PS.FS_TITLE, pad=16)
     ax.set_ylabel(f"mean Δ per cell\n({delta_label})", fontsize=PS.FS_LABEL)
     return stats
 
@@ -237,13 +241,10 @@ def run(arm_key: str, gate: str):
     all_bc = list(pd.unique(df[["src_barcode", "tgt_barcode"]].values.ravel()))
     real_by_bc = load_real_counts_by_barcode(all_bc, model.gene_names)
 
-    idx_set = set(df["idx"])
-    pred_by_idx = {}
-    with open(TEST_INFERENCE_PATH) as f:
-        for line in f:
-            r = json.loads(line)
-            if r["idx"] in idx_set:
-                pred_by_idx[r["idx"]] = r["pred"].strip().split()
+    model_cells = {}
+    for path in MODEL_INFERENCE:
+        for key, recs in C.load_cells(path).items():
+            model_cells.setdefault(key, []).extend(r["pred"] for r in recs)
 
     violins = {}
     gene_counts = {}
@@ -261,12 +262,15 @@ def run(arm_key: str, gate: str):
 
         real_src_X = np.stack([real_by_bc[bc] for bc in sub["src_barcode"]])
         real_tgt_X = np.stack([real_by_bc[bc] for bc in sub["tgt_barcode"]])
-        pred_X = rem.reconstruct_batch([pred_by_idx[i] for i in sub["idx"]], model, C.K)
         real_src_topk = CR.truncate_topk(real_src_X, C.K)
         real_tgt_topk = CR.truncate_topk(real_tgt_X, C.K)
-
         d_real, m_real = C.delta_and_mask(real_src_topk, real_tgt_topk)
-        d_model, m_model = C.delta_and_mask(real_src_topk, pred_X)
+
+        cells = model_cells[(ct, arm["cond"])]
+        rng = np.random.default_rng(MODEL_CELLS_SEED)
+        ref_topk = real_src_topk[rng.integers(0, len(real_src_topk), len(cells))]
+        pred_X = rem.reconstruct_batch(cells, model, C.K)
+        d_model, m_model = C.delta_and_mask(ref_topk, pred_X)
         means_real = per_cell_means(d_real, m_real, bool_by_subset)
         means_model = per_cell_means(d_model, m_model, bool_by_subset)
 
@@ -304,7 +308,7 @@ def run(arm_key: str, gate: str):
     plt.close(fig)
     print(f"-> {fig_path}")
 
-    cols = ["cell_type", "arm", "gate", "n_genes_down", "n_genes_up",
+    cols = ["cell_type", "arm", "gate", "n_genes_down", "n_genes_up", "n_real", "n_model",
             "expected_down", "expected_up",
             "p_real_down", "p_real_up", "p_model_down", "p_model_up",
             "median_real_bg", "median_real_down", "median_real_up",

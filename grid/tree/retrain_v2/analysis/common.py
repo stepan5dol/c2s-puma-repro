@@ -49,7 +49,8 @@ CT_MAP = {
 COND_ORDER = ["HO", "AZI"]
 
 _PROMPT_RE = {
-    "species":      re.compile(r"Species:\s*([^\n]+)"),
+    # old prompts: "Species: Rattus norvegicus"; prompts since 2026-11-09: "... representing a Rattus norvegicus cell ..."
+    "species":      re.compile(r"(Rattus norvegicus|Homo sapiens)"),
     "cell_type":    re.compile(r"Cell type:\s*([^\(\n]+)"),
     "perturbation": re.compile(r"Perturbation:\s*([^\n]+)"),
     "unexposed":    re.compile(r"\nUnexposed:\s*([^\n]+)"),
@@ -61,6 +62,30 @@ def condition_of(perturbation: str) -> str | None:
         return "HO"
     if perturbation.startswith("Azithromycin"):
         return "AZI"
+    return None
+
+
+_STATE_RE = re.compile(r"\nCondition:\s*([^\n]+)")
+_TREAT_RE = re.compile(r"\nTreatment:\s*([^\n]+)")
+
+
+def condition_of_prompt(prompt: str) -> str | None:
+    """Old prompts: from the Perturbation: line. Prompts since 2026-11-09: from the Condition: and Treatment: lines
+    (retrain_prompt/pipeline/common.py), room air -> RA, hyperoxia -> HO, hyperoxia + azithromycin -> AZI."""
+    m = _PROMPT_RE["perturbation"].search(prompt)
+    if m:
+        return condition_of(m.group(1).strip())
+    state, treat = _STATE_RE.search(prompt), _TREAT_RE.search(prompt)
+    if not state or not treat:
+        return None
+    state, treat = state.group(1).strip().lower(), treat.group(1).strip().lower()
+    if state.startswith("room air") and treat == "none":
+        return "RA"
+    if state.startswith("hyperoxia"):
+        if treat == "none":
+            return "HO"
+        if treat.startswith("azithromycin"):
+            return "AZI"
     return None
 
 
@@ -94,8 +119,7 @@ def load_cells(jsonl_path: Path) -> dict[tuple[str, str], list[dict]]:
             ct = CT_MAP.get(ct_raw)
             if ct is None:
                 continue
-            pert = _PROMPT_RE["perturbation"].search(prompt).group(1).strip()
-            cond = condition_of(pert)
+            cond = condition_of_prompt(prompt)
             if cond is None:
                 continue
             m_unexp = _PROMPT_RE["unexposed"].search(prompt)

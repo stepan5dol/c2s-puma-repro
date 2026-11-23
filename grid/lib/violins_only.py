@@ -194,6 +194,7 @@ try:
         T.MODEL_INFERENCE = spec["model"]
         T.main()
         UC.TEST_INFERENCE_PATH = path
+        UC.MODEL_INFERENCE = spec["model"]
         sys.argv = ["x"]
         B.main()
         dest = OUT / run / "violins"
