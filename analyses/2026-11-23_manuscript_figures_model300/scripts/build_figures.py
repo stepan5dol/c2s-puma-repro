@@ -7,7 +7,7 @@ real_counts_suite_ortho (build_panelC_dotplot.py, venn_rat_human_model_run4.py, 
 unchanged on a copy under <run folder>/work/draw. 5-S1 is the energy distance between generated and measured cells
 of each state (grid/lib/a8_baselines.py construction).
 usage: python3 build_figures.py <run folder> [model jsonl ...]
-  model jsonl  generated cells of the human disease states for 5-S1 (default: the test file)
+  model jsonl  generated cells per state for 5-S1, replacing the test file's for the states they hold
 """
 from __future__ import annotations
 
@@ -138,8 +138,8 @@ def build_s1_energy() -> None:
     g = D.energy_groups(TEST_JSONL)
     gen = {k: [c["pred"] for c in v] for k, v in g.items()}
     for path in MODEL_JSONL:
-        for (ct, cond), cells in CH.load_azi_counterfactual(path).items():
-            gen[("Homo", ct, cond)] = [c["pred"] for c in cells]
+        for key, cells in D.energy_groups(path).items():
+            gen[key] = [c["pred"] for c in cells]
     states = [("Rattus", "RA", "Rat, room air"), ("Rattus", "HO", "Rat, hyperoxia"),
               ("Rattus", "AZI", "Rat, hyperoxia + azithromycin"),
               ("Homo", "He22", "Human, fetal lung GW24"), ("Homo", "Term0d", "Human, term-born day 7"),
