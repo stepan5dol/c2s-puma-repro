@@ -25,7 +25,25 @@ ROOT = Path(os.environ["C2S_ROOT"])  # tree root: holds retrain_v2/, pipeline/, 
 R = ROOT / "retrain_v2"
 ORTHO = R / "analysis/real_counts_suite_ortho"
 OUT = Path(os.environ["C2S_WORK"]) / "runs"
-RUNS = {k: Path(v) for k, v in json.load(open(sys.argv[1])).items()}  # {name: test_t10.jsonl}
+_RAW_RUNS = json.load(open(sys.argv[1]))
+DEFAULT_REG = Path(os.environ.get("EXAMPLE_REG_PATH", ROOT / "retrain_prompt/pipeline/sft_example_registry.csv"))
+RUNS = {}
+for _name, _val in _RAW_RUNS.items():
+    if isinstance(_val, dict):
+        _test = Path(_val["test"])
+        _azi = Path(_val["azi"]) if _val.get("azi") else (_test.parent / "inference_azi_results.jsonl")
+        _k = int(_val.get("k", 2000))
+        _reg = Path(_val["registry"]) if _val.get("registry") else (Path("/nonexistent") if "registry" in _val else DEFAULT_REG)
+        _model = [Path(m) for m in _val["model"]] if _val.get("model") else [_test]
+    else:
+        _test = Path(_val)
+        _azi = _test.parent / "inference_azi_results.jsonl"
+        _k = int(os.environ.get("C2S_K", "2000"))
+        _reg = DEFAULT_REG
+        _model = [_test]
+    RUNS[_name] = {"test": _test, "azi": _azi, "k": _k, "registry": _reg, "model": _model}
+_bad_k = {n: v["k"] for n, v in RUNS.items() if v["k"] != 2000}
+assert not _bad_k, f"the human calibration in scan_only.py is the K = 2000 fit; runs with another K: {_bad_k}"
 
 DIRS = [ORTHO / "rat_panel_variants", ORTHO / "human_panel_variants"]
 PATTERNS = {
@@ -44,20 +62,24 @@ g = {"__name__": "sweep", "__file__": str(str(Path(__file__).with_name("scan_onl
 exec(compile(open(g["__file__"]).read(), g["__file__"], "exec"), g)
 L = g["L"]
 ARP = g["ARP"]
+CH = g["CH"]
+CR = g["CR"]
 s = g["_scan_once"]()
 CSV = Path(L.C.BPD_COUNTS_PATH).resolve()
 HEADER = pd.Index(s["raw_columns"])
 BC = list(s["bc"])
 
 in_csv = set(pd.read_csv(L.C.BPD_META_PATH, usecols=["id"])["id"])
-REG_PATH = Path(os.environ.get("EXAMPLE_REG_PATH", ROOT / "retrain_prompt/pipeline/sft_example_registry.csv"))
-if REG_PATH.exists():
-    reg = pd.read_csv(REG_PATH)
-    reg_bpd = reg[(reg["split"] == "test") & (reg["direction"] == "fwd") & (reg["source"] == "bpd")]
-    need = set(reg_bpd["barcode"]) & in_csv
-else:
-    pairs = pd.read_csv(ORTHO / "human_panel_variants/recovered_human_test_pairs.csv")
-    need = (set(pairs.src_barcode) | set(pairs.tgt_barcode)) & in_csv
+need = set()
+for _spec in RUNS.values():
+    _reg_p = _spec["registry"]
+    if _reg_p.exists():
+        _reg = pd.read_csv(_reg_p)
+        _reg_bpd = _reg[(_reg["split"] == "test") & (_reg["direction"] == "fwd") & (_reg["source"] == "bpd")]
+        need |= set(_reg_bpd["barcode"]) & in_csv
+    else:
+        _pairs = pd.read_csv(ORTHO / "human_panel_variants/recovered_human_test_pairs.csv")
+        need |= (set(_pairs.src_barcode) | set(_pairs.tgt_barcode)) & in_csv
 assert need <= set(BC), f"{len(need - set(BC))} test barcodes outside the scan"
 
 
@@ -79,6 +101,11 @@ import updown_core as UC  # noqa: E402
 import build_all_panel_variants as B  # noqa: E402
 import human_updown_percell as DIS  # noqa: E402
 import build_disease_arms_trajectory as T  # noqa: E402
+import ablation_export_for_limma as EXP  # noqa: E402
+import ablation_limma_sets as LIM  # noqa: E402
+
+HPV = ORTHO / "human_panel_variants"
+CAMERA_CONDITIONS = ("BPD7mo", "BPDPH7mo", "Acute26")
 
 CUR, rec = {}, {}
 DIS_DEFAULTS = {k: v for k, v in vars(DIS).items() if k.isupper()}
@@ -115,8 +142,8 @@ def dis_draw(ax, scores, title, *a, **k):
 
 
 UC.run, UC.draw_panel, DIS.run, DIS.draw_panel = uc_run, uc_draw, dis_run, dis_draw
-UC.EXAMPLE_REG_PATH = REG_PATH
-T.EXAMPLE_REG_PATH = REG_PATH
+UC.EXAMPLE_REG_PATH = DEFAULT_REG
+T.EXAMPLE_REG_PATH = DEFAULT_REG
 _atlas, _orig_atlas = {}, T.load_atlas_by_barcode
 
 
@@ -142,22 +169,29 @@ for d in DIRS:
         shutil.copy2(p, q)
 had = {p for d in DIRS for p in ours(d)}
 try:
-    for run, path in RUNS.items():
-        print(f"\n######## violins: {run} ({path.name})", flush=True)
+    for run, spec in RUNS.items():
+        path, azi_path, k, reg_path = spec["test"], spec["azi"], spec["k"], spec["registry"]
+        print(f"\n######## violins: {run} ({path.name}, K={k}, reg={'yes' if reg_path.exists() else 'recovered_csv'})", flush=True)
         t0 = time.time() - 1
         rec.clear()
         vars(DIS).update(DIS_DEFAULTS)
-        for p in (ORTHO / "human_panel_variants/reports/rat_schema").glob("human_*_rescue_predicted_azi.xlsx"):
-            b = BACKUP / p.relative_to(ORTHO)
-            if b.exists():
-                shutil.copy2(b, p)
-        azi_path = path.parent / "inference_azi_results.jsonl"
-        if azi_path.exists() and azi_path.stat().st_size > 0:
-            print(f"[rescue] computing per-run human rescued panels from {azi_path}", flush=True)
-            ARP.VARIANTS = [run]
-            ARP.AZI_JSONL_OF = {run: azi_path}
-            ARP.main()
+        CR.K = CH.K = UC.C.K = k
+        UC.EXAMPLE_REG_PATH = reg_path
+        T.EXAMPLE_REG_PATH = reg_path
+        rat_schema_dir = ORTHO / "human_panel_variants/reports/rat_schema"
+        for p in rat_schema_dir.glob("human_*_rescue_predicted_azi.xlsx"):
+            p.unlink()
+        assert azi_path.exists() and azi_path.stat().st_size > 0, (
+            f"{run}: missing per-run AZI file {azi_path}; refusing to fall back to shared table"
+        )
+        print(f"[rescue] computing per-run human rescued panels from {azi_path} (K={k})", flush=True)
+        ARP.VARIANTS = [run]
+        ARP.AZI_JSONL_OF = {run: azi_path}
+        ARP.main()
+        n_xlsx = len(list(rat_schema_dir.glob("human_*_rescue_predicted_azi.xlsx")))
+        assert n_xlsx == 12, f"{run}: expected 12 per-run rescued xlsx, got {n_xlsx}"
         T.TEST_INFERENCE = path
+        T.MODEL_INFERENCE = spec["model"]
         T.main()
         UC.TEST_INFERENCE_PATH = path
         sys.argv = ["x"]
@@ -169,6 +203,20 @@ try:
                     q = dest / ("rat" if d.name.startswith("rat") else "human") / p.relative_to(d)
                     q.parent.mkdir(parents=True, exist_ok=True)
                     shutil.copy2(p, q)
+        shutil.copy2(HPV / "reports" / f"ablation_rescue_genomewide_{run}.csv",
+                     HPV / "reports" / "human_rescue_genomewide.csv")
+        (R / "results").mkdir(exist_ok=True)
+        shutil.copy2(azi_path, R / "results" / f"inference_azi_results_{run}.jsonl")
+        cam = dest / "human" / "camerapr"
+        cam.mkdir(parents=True, exist_ok=True)
+        for cond in CAMERA_CONDITIONS:
+            sys.argv = ["x", "--condition", cond, "--variant", run]
+            EXP.main()
+            sys.argv = ["x", "--condition", cond, "--variant", run]
+            LIM.main()
+            shutil.copy2(HPV / "autophagy_program" / "reports" / f"ablation_{cond.lower()}_limma_sets_{run}.csv",
+                         cam / f"{cond.lower()}_limma_sets.csv")
+        shutil.copy2(HPV / "reports" / "human_rescue_genomewide.csv", cam / "human_rescue_genomewide.csv")
         (dest / "scores.json").write_text(json.dumps(rec))
         print(f"-> {dest} ({len(rec)} panels)", flush=True)
 finally:
