@@ -228,7 +228,7 @@ def run(arm_key: str, gate: str):
     expected = {"down": PSets.EXPECTED[("Rescued_HO_down", arm["cond"])],
                 "up": PSets.EXPECTED[("Rescued_HO_up", arm["cond"])]}
 
-    model = rem.fit(C.H5AD)
+    model = rem.fit(C.H5AD, k=C.K)
     print(f"[calibration] slope={model.slope:.5f} intercept={model.intercept:.4f} r2={model.r2:.4f}")
     panels_by_ct = PSets.load_panels(gate)
 

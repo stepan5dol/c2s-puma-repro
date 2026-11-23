@@ -20,12 +20,14 @@ import numpy as np
 K = 2000
 
 
-def truncate_topk(X: np.ndarray, k: int = K) -> np.ndarray:
+def truncate_topk(X: np.ndarray, k: int | None = None) -> np.ndarray:
     """Zero everything except each row's own top-k values -- same K=800 budget
     pred is stuck with by cell-sentence format, applied to real values too.
     Without this, real (unbounded ~18-20k genes) vs pred (K=800-capped) is
     apples-to-oranges: most background genes are real-nonzero/pred-structural-
     zero purely from the vocabulary-size mismatch, not from model behavior."""
+    if k is None:
+        k = K
     Xt = np.zeros_like(X)
     if X.shape[1] <= k:
         return X.copy()

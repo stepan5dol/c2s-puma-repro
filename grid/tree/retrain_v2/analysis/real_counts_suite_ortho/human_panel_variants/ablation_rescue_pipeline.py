@@ -157,18 +157,28 @@ def _get_disease_cache():
     print("[data] real Term0d+Term20d control (real counts, model gene axis)...")
     term_mats = RC.real_term_matrices(model)
     term_top800 = {ct: CR.truncate_topk(X) for ct, X in term_mats.items()}
+    print("[data] real He22 fetal GW24 control (real counts, model gene axis)...")
+    he22_mats = RC.real_he22_matrices(model)
+    he22_top800 = {ct: CR.truncate_topk(X) for ct, X in he22_mats.items()}
+
+    ctrl_by_cond = {
+        "Acute26": (he22_mats, he22_top800),
+        "BPD7mo": (term_mats, term_top800),
+        "BPDPH7mo": (term_mats, term_top800),
+    }
 
     by_cond = {}
     for cond_csv in CONDITIONS:
         print(f"\n[data] real {cond_csv} disease counts...")
         disease_mats = RC.real_disease_matrices(cond_csv, model)
+        ctrl_mats, ctrl_top800 = ctrl_by_cond[cond_csv]
         by_ct = {}
         for ct in CH.CT_ORDER:
-            if ct not in disease_mats or ct not in term_mats:
+            if ct not in disease_mats or ct not in ctrl_mats:
                 continue
-            ctrl_full = term_mats[ct]
+            ctrl_full = ctrl_mats[ct]
             dis_full = disease_mats[ct]
-            ctrl_t8 = term_top800[ct]
+            ctrl_t8 = ctrl_top800[ct]
             dis_t8 = CR.truncate_topk(dis_full)
             by_ct[ct] = (
                 ctrl_full,
