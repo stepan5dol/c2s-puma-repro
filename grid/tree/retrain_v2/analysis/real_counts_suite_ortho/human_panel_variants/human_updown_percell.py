@@ -90,6 +90,10 @@ CT_TITLE = {"gCap": "General capillary endothelial cell",
             "POOLED": "All cell types pooled"}
 ONLY_CT = None
 
+MODEL_CELLS: dict[tuple[str, str], list[list[str]]] = {}
+MODEL_CELLS_SEED = 0
+LOADER_CONDITION = {"Acute26": "Acute", "BPD7mo": "BPD", "BPDPH7mo": "BPD-PH"}
+
 SUBSETS = ("bg", "down", "up")
 X_POS = {("real", "bg"): 0.0, ("real", "down"): 1.0, ("real", "up"): 2.0,
          ("model", "bg"): 3.4, ("model", "down"): 4.4, ("model", "up"): 5.4}
@@ -172,7 +176,9 @@ def draw_panel(ax, scores, title, show_legend=False):
     for x, lbl in ((1.0, "datasets"), (4.4, "model")):
         ax.text(x, ax.get_ylim()[1], lbl, ha="center", va="bottom", fontsize=PS.FS_ANNOT,
                 color="#666666")
-    ax.set_title(f"{title}\nn = {len(scores[('real','down')])} cells",
+    n_real, n_model = len(scores[("real", "down")]), len(scores[("model", "down")])
+    stats["n_real"], stats["n_model"] = n_real, n_model
+    ax.set_title(f"{title}\nn = {n_real} cells" + (f", {n_model} generated" if n_model != n_real else ""),
                  fontsize=PS.FS_TITLE, pad=16)
     ax.set_ylabel(f"mean Δ per cell\n({TGT_SHORT} − {SRC_SHORT})", fontsize=PS.FS_LABEL)
     return stats
@@ -189,7 +195,7 @@ def legend_handles_labels():
     return h, ["background", PANEL_TITLE["down"], PANEL_TITLE["up"]]
 
 
-def run(gate, df, real_by_bc, pred_by_idx, model, ct_map):
+def run(gate, df, real_by_bc, model, ct_map):
     panels_by_ct = PSH.load_panels(gate, condition=PANEL_CONDITION)
     violins, report_rows = {}, []
 
@@ -206,12 +212,15 @@ def run(gate, df, real_by_bc, pred_by_idx, model, ct_map):
 
         real_src = np.stack([real_by_bc[bc] for bc in sub["src_barcode"]])
         real_tgt = np.stack([real_by_bc[bc] for bc in sub["tgt_barcode"]])
-        pred_X = rem.reconstruct_batch([pred_by_idx[i] for i in sub["idx"]], model, CR.K)
         src_t8 = CR.truncate_topk(real_src, CR.K)
         tgt_t8 = CR.truncate_topk(real_tgt, CR.K)
-
         d_real, m_real = C.delta_and_mask(src_t8, tgt_t8)
-        d_model, m_model = C.delta_and_mask(src_t8, pred_X)
+
+        cells = MODEL_CELLS[(ct, LOADER_CONDITION[CONDITION])]
+        rng = np.random.default_rng(MODEL_CELLS_SEED)
+        ref_t8 = src_t8[rng.integers(0, len(src_t8), len(cells))]
+        pred_X = rem.reconstruct_batch(cells, model, CR.K)
+        d_model, m_model = C.delta_and_mask(ref_t8, pred_X)
         mr = per_cell_means(d_real, m_real, by_subset)
         mm = per_cell_means(d_model, m_model, by_subset)
 
@@ -246,7 +255,7 @@ def run(gate, df, real_by_bc, pred_by_idx, model, ct_map):
     plt.close(fig)
     print(f"-> {fig_path}")
 
-    cols = ["cell_type", "source", "target", "src_label", "pairing", "gate",
+    cols = ["cell_type", "source", "target", "src_label", "pairing", "gate", "n_real", "n_model",
             "p_real_down", "p_real_up", "p_model_down", "p_model_up",
             "median_real_bg", "median_real_down", "median_real_up",
             "median_model_bg", "median_model_down", "median_model_up"]
@@ -284,18 +293,11 @@ def main():
     bcs = set(df["src_barcode"]) | set(df["tgt_barcode"])
     real_by_bc = load_real_counts_by_barcode(bcs, model)
 
-    idx_set = set(df["idx"])
-    pred_by_idx = {}
-    with open(TEST_INFERENCE_PATH) as f:
-        for line in f:
-            r = json.loads(line)
-            if r["idx"] in idx_set:
-                pred_by_idx[r["idx"]] = r["pred"].strip().split()
-    print(f"[pred] {len(pred_by_idx)} predictions loaded")
+    MODEL_CELLS.update({k: [c["pred"] for c in v] for k, v in CH.load_azi_counterfactual(TEST_INFERENCE_PATH).items()})
 
     for gate in PSH.GATES:
         print(f"\n{'=' * 78}\n=== gate={gate}\n{'=' * 78}")
-        run(gate, df, real_by_bc, pred_by_idx, model, ct_map)
+        run(gate, df, real_by_bc, model, ct_map)
 
 
 if __name__ == "__main__":

@@ -57,6 +57,7 @@ EXAMPLE_REG_PATH = Path(os.environ.get(
 ))
 TEST_INFERENCE = Path("/Users/stepandolzhenko/Documents/AzithroGemma/retrain_v2/results/test_inference_results_t10.jsonl")
 SEED = 0
+MODEL_INFERENCE = [TEST_INFERENCE]
 
 GATES = ("full_list",)
 SOLO_CT = ("gCap",)
@@ -209,14 +210,13 @@ def main():
 
     pairs = load_pairs_table()
 
-    bpd_needed, atlas_needed, idx_needed = set(), set(), set()
+    bpd_needed, atlas_needed = set(), set()
     for cond, src, pt, kind in ARMS:
         sub = pairs[pairs["pair_type"] == pt]
         bpd_needed |= set(sub["tgt_barcode"])
-        idx_needed |= set(sub["idx"])
         if kind == "atlas":
             atlas_needed |= set(sub["src_barcode"])
-    print(f"[plan] bpd={len(bpd_needed)} atlas={len(atlas_needed)} preds={len(idx_needed)}")
+    print(f"[plan] bpd={len(bpd_needed)} atlas={len(atlas_needed)}")
 
     real_by_bc = load_bpd_by_barcode(bpd_needed, model)
     if atlas_needed:
@@ -226,13 +226,11 @@ def main():
     term_mats = RC.real_term_matrices(model)
     print("  " + ", ".join(f"{ct}:{X.shape[0]}" for ct, X in term_mats.items()))
 
-    pred_by_idx = {}
-    with open(TEST_INFERENCE) as f:
-        for line in f:
-            r = json.loads(line)
-            if r["idx"] in idx_needed:
-                pred_by_idx[r["idx"]] = r["pred"].strip().split()
-    print(f"[pred] {len(pred_by_idx)} predictions")
+    DIS.MODEL_CELLS = {}
+    for path in MODEL_INFERENCE:
+        for key, cells in CH.load_azi_counterfactual(path).items():
+            DIS.MODEL_CELLS.setdefault(key, []).extend(c["pred"] for c in cells)
+    print("[model cells] " + ", ".join(f"{ct}/{cond}:{len(v)}" for (ct, cond), v in sorted(DIS.MODEL_CELLS.items())))
 
     rng = np.random.default_rng(SEED)
     for cond, src_label, pt, kind in ARMS:
@@ -262,11 +260,11 @@ def main():
         for gate in GATES:
             print(f"--- gate={gate}, all cell types")
             DIS.ONLY_CT = None
-            DIS.run(gate, df, real_by_bc, pred_by_idx, model, CT_MAP)
+            DIS.run(gate, df, real_by_bc, model, CT_MAP)
             for ct in SOLO_CT:
                 print(f"--- gate={gate}, {ct} alone")
                 DIS.ONLY_CT = ct
-                DIS.run(gate, df, real_by_bc, pred_by_idx, model, CT_MAP)
+                DIS.run(gate, df, real_by_bc, model, CT_MAP)
             DIS.ONLY_CT = None
 
 
