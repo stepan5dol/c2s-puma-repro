@@ -10,8 +10,8 @@
 #SBATCH --array=0-5
 #SBATCH --output=/xdisk/vkalin/dolzhenko/c2s/logs/%x_%A_%a.out
 
-# Repeated sampling for the human disease states: N generations per prompt (inference_rep300/build_rep300.py), one array
-# task per (state, arm), on the final model of an existing training run. Copy of hpc/infer_only.slurm: same image, same
+# Repeated sampling for the human disease states and the rat states: N generations per prompt
+# (inference_rep300/build_rep300.py), one array task per human (state, arm) and per rat state, on the final model of an existing training run. Copy of hpc/infer_only.slurm: same image, same
 # patched run_azi.py (vLLM dtype, forward prompt recognised by its new first words, forward limit 7936), same dtype checks;
 # changed: vLLM in bfloat16 (author's decision 2026-11-18: inference in bf16; fp32 weights downcast, as ALLOW_DOWNCAST=1 in
 # c2s-puma-std; basis results/fp32_2026-10-30/fp32_vs_bf16.log), inputs from the repository (inference_rep300/, checked against its sha256.txt), output folder
@@ -23,7 +23,7 @@ set -euo pipefail
 
 RUN=${RUN:?set RUN to the training run folder}
 DTYPE=bfloat16
-TASKS=(Acute26_noazi Acute26_azi BPD7mo_noazi BPD7mo_azi BPDPH7mo_noazi BPDPH7mo_azi)  # order of build_rep300.py
+TASKS=(Acute26_noazi Acute26_azi BPD7mo_noazi BPD7mo_azi BPDPH7mo_noazi BPDPH7mo_azi Rat_RA Rat_HO Rat_AZI)  # order of build_rep300.py
 NAME=${TASKS[$SLURM_ARRAY_TASK_ID]}
 DATA=/xdisk/vkalin/dolzhenko/c2s
 REPO=$DATA/repo
