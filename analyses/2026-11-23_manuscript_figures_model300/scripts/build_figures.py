@@ -161,7 +161,7 @@ def build_s1_energy() -> None:
     pd.DataFrame(rows).to_csv(OUT_DIR / "Figure_5-S1_energy.csv", index=False)
 
     PS.apply()
-    fig, axes = plt.subplots(3, 3, figsize=(PS.FIG_W, 6.6), layout="constrained", sharey=True)
+    fig, axes = plt.subplots(3, 3, figsize=(PS.FIG_W, 7.4), layout="constrained", sharey=True)
     for ax, (label, n, n_gen, rr, cross, pp, e) in zip(axes.ravel(), panels):
         deck_style(ax)
         for arr, color, lab in ((rr, PS.GT_COLOR, "measured – measured"),
@@ -169,7 +169,7 @@ def build_s1_energy() -> None:
                                 (pp, PS.HO_COLOR, "generated – generated")):
             xs = np.sort(arr)
             ax.plot(xs, np.arange(1, len(xs) + 1) / len(xs), color=color, lw=1.8, label=lab)
-        ax.set_title(f"{label}\n{n} measured, {n_gen} generated   ·   energy = {e:.2f}",
+        ax.set_title(f"{label}\n{n} measured, {n_gen} generated\nenergy = {e:.2f}",
                      fontsize=PS.FS_TITLE - 0.5, color=INK, loc="left")
         lo = min(float(a.min()) for a in (rr, cross, pp))
         hi = max(float(a.max()) for a in (rr, cross, pp))
