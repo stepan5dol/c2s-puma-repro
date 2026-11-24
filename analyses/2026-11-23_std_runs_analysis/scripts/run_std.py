@@ -215,7 +215,7 @@ def cmd_analyze(work_out: Path) -> None:
         # Copy violins_only.py to tmp with safe no-rat skip (leaves repo untouched)
         v_tmp = td_p / "violins_only_safe.py"
         v_txt = (LIB / "violins_only.py").read_text()
-        old_rat = '        UC.TEST_INFERENCE_PATH = path\n        sys.argv = ["x"]\n        B.main()'
+        old_rat = '        UC.TEST_INFERENCE_PATH = path\n        UC.MODEL_INFERENCE = spec["model"]\n        sys.argv = ["x"]\n        B.main()'
         new_rat = (
             '        _has_rat = True\n'
             '        if reg_path.exists():\n'
@@ -223,6 +223,7 @@ def cmd_analyze(work_out: Path) -> None:
             '            _has_rat = bool(((_r["split"] == "test") & (_r["direction"] == "fwd") & (_r["source"] == "rat")).any())\n'
             '        if _has_rat:\n'
             '            UC.TEST_INFERENCE_PATH = path\n'
+            '            UC.MODEL_INFERENCE = spec["model"]\n'
             '            sys.argv = ["x"]\n'
             '            B.main()\n'
             '        else:\n'
