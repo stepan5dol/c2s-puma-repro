@@ -248,10 +248,10 @@ finish() {
         pkill -P "$UPID" 2>/dev/null; kill "$UPID" 2>/dev/null; wait "$UPID" 2>/dev/null
     fi
     if [ -n "$TGPID" ]; then
-        pkill -P "$TGPID" 2>/dev/null; kill "$TGPID" 2>/dev/null; wait "$TGPID" 2>/dev/null
+        kill "$TGPID" 2>/dev/null; wait "$TGPID" 2>/dev/null
     fi
     if [ -n "$INFPID" ]; then
-        pkill -P "$INFPID" 2>/dev/null; kill "$INFPID" 2>/dev/null; wait "$INFPID" 2>/dev/null
+        kill "$INFPID" 2>/dev/null; wait "$INFPID" 2>/dev/null
     fi
     OUT=$WORK/mainwork/$OUTNAME
     BEST=
@@ -281,7 +281,7 @@ finish() {
         [ "$CKPTS" = xdisk ] && copy_ckpts final
     fi
     if [ -n "$MONPID" ]; then
-        pkill -P "$MONPID" 2>/dev/null; kill "$MONPID" 2>/dev/null; wait "$MONPID" 2>/dev/null
+        kill "$MONPID" 2>/dev/null; wait "$MONPID" 2>/dev/null
     fi
     {
         echo "end: $(date '+%F %T %Z')"
