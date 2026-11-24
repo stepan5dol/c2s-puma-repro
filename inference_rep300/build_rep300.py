@@ -26,7 +26,7 @@ OUT = Path(__file__).resolve().parent
 STATES = ["Acute26", "BPD7mo", "BPDPH7mo"]
 CTS = ["gCap", "aCap", "Pericyte", "VEC"]
 CT_REG = {"gCap": "gCap", "aCap": "aCap", "Pericyte": "Pericyte", "Pulmonary venous EC": "VEC", "VEC": "VEC"}
-ARMS = ["noazi", "azi"]  # array task id = 2 * state index + arm index (hpc/infer_rep300.slurm uses the same order)
+ARMS = ["noazi", "azi"]  # file order = NAMES of hpc/infer_rep300.slurm
 RAT_STATES = ["RA", "HO", "AZI"]  # array task ids 6, 7, 8
 RAT_CT = {"gCAP": "gCap", "aCAP": "aCap", "Peri": "Pericyte", "VEC": "VEC"}
 
